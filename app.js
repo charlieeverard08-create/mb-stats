@@ -69,9 +69,10 @@ const S = {
   error: '',
   form: { type: '', book: '', match: '', backOdds: '', amount: '', layOdds: '', over: {} },
   commission: prefs.commission != null ? prefs.commission : 0,
+  theme: ['auto', 'dark', 'light', 'party'].includes(prefs.theme) ? prefs.theme : 'auto',
   saving: false
 };
-const savePrefs = () => store.set(PREF_KEY, JSON.stringify({ period: S.period, bookSort: S.bookSort, commission: S.commission }));
+const savePrefs = () => store.set(PREF_KEY, JSON.stringify({ period: S.period, bookSort: S.bookSort, commission: S.commission, theme: S.theme }));
 
 const PERIODS = [
   ['month', 'Month'],
@@ -100,6 +101,18 @@ function normalise(raw) {
     status: String(b['Status'] || '').trim().toLowerCase(),
     row: Number(b['Row']) || 0
   })).filter((b) => b.book && b.date);
+  // Treat "247Bet" and "247bet" (or "Net Bet"/"NetBet") as one bookie, shown with the spelling you use most.
+  const keyOf = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const spellings = new Map();
+  bets.forEach((b) => {
+    const k = keyOf(b.book);
+    const m = spellings.get(k) || new Map();
+    m.set(b.book, (m.get(b.book) || 0) + 1);
+    spellings.set(k, m);
+  });
+  const canonical = new Map();
+  spellings.forEach((m, k) => canonical.set(k, Array.from(m.entries()).sort((a, b) => b[1] - a[1])[0][0]));
+  bets.forEach((b) => { b.rawBook = b.book; b.book = canonical.get(keyOf(b.book)); });
   bets.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : a.time < b.time ? 1 : a.time > b.time ? -1 : a.row - b.row));
   const gubbed = (raw.gubbed || []).map((s) => String(s).trim()).filter(Boolean);
   return { bets, gubbed, updated: raw.updated || new Date().toISOString() };
@@ -569,6 +582,7 @@ async function submitBet() {
     await postSheet({ action: 'add', bet });
     S.form = { type: f.type, book: '', match: f.match, backOdds: '', amount: '', layOdds: '', over: {} };
     toast('Bet added');
+    confetti();
     msg.textContent = 'Added to your sheet.'; msg.className = 'small pos';
     if (document.activeElement) document.activeElement.blur();
     await load(false);
@@ -642,9 +656,10 @@ function openSettle(b) {
     if (v == null) { msg.textContent = 'Enter the profit as a number.'; msg.className = 'small err'; return; }
     btn.disabled = true; btn.textContent = 'Saving…';
     try {
-      await postSheet({ action: 'settle', row: b.row, date: b.date, bookmaker: b.book, match: b.match, profit: v });
+      await postSheet({ action: 'settle', row: b.row, date: b.date, bookmaker: b.rawBook || b.book, match: b.match, profit: v });
       closeSettle();
       toast('Settled ' + signed(v));
+      if (v > 0) confetti();
       await load(false);
     } catch (e) {
       msg.textContent = e.message; msg.className = 'small err';
@@ -656,6 +671,61 @@ function closeSettle() {
   const sheet = $('#sheet');
   sheet.classList.remove('show');
   setTimeout(() => { sheet.hidden = true; sheet.innerHTML = ''; }, 200);
+}
+
+/* ---------- settings & themes ---------- */
+const THEMES = [['auto', 'Auto'], ['dark', 'Dark'], ['light', 'Light'], ['party', 'Party']];
+const THEME_BAR = { dark: '#0e1116', light: '#f5f6f8', party: '#ff3cac' };
+
+function applyTheme(t) {
+  document.documentElement.setAttribute('data-theme', t);
+  const light = t === 'light' || (t === 'auto' && window.matchMedia('(prefers-color-scheme: light)').matches);
+  const bar = t === 'party' ? THEME_BAR.party : light ? THEME_BAR.light : THEME_BAR.dark;
+  const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.setAttribute('content', bar);
+  if (S.data) drawCharts(); // charts read colours at draw time
+}
+
+function openSettings() {
+  const sheet = $('#sheet');
+  sheet.innerHTML = `<div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="set-title">
+    <div class="grab"></div>
+    <h2 id="set-title">Settings</h2>
+    <p class="sub">Saved on this device</p>
+    <div class="fl">Theme</div>
+    <div class="themes">${THEMES.map(([k, l]) => `<button type="button" class="theme-opt" data-theme-pick="${k}" aria-pressed="${S.theme === k}"><span class="swatch sw-${k}"></span>${l}</button>`).join('')}</div>
+    <div class="set-row" style="margin-top:12px"><label for="set-comm">Exchange commission %</label><input id="set-comm" class="input" inputmode="decimal" value="${esc(S.commission)}"></div>
+    <div class="set-row"><span>Sheet link</span><span class="muted small">${store.get(LINK_KEY) ? 'Connected' : 'Not connected'}</span></div>
+    <button type="button" class="wide-btn" id="set-link">Change sheet link</button>
+    <button type="button" class="text-btn" id="set-close">Done</button>
+  </div>`;
+  sheet.hidden = false;
+  requestAnimationFrame(() => sheet.classList.add('show'));
+  $$('[data-theme-pick]', sheet).forEach((b) => b.addEventListener('click', () => {
+    S.theme = b.dataset.themePick; savePrefs(); applyTheme(S.theme);
+    $$('[data-theme-pick]', sheet).forEach((o) => o.setAttribute('aria-pressed', String(o === b)));
+    if (S.theme === 'party') confetti();
+  }));
+  const comm = $('#set-comm');
+  comm.addEventListener('input', () => { const v = pnum(comm.value); S.commission = v == null ? 0 : v; savePrefs(); if (S.tab === 'add') renderCalc(); });
+  $('#set-link').onclick = () => { closeSettle(); setTimeout(() => showSetup(true), 220); };
+  $('#set-close').onclick = closeSettle;
+  sheet.onclick = (e) => { if (e.target === sheet) closeSettle(); };
+}
+
+function confetti() {
+  if (S.theme !== 'party' || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const colours = ['#ff3cac', '#ffe53b', '#00f5ff', '#00f5a0', '#ff9a3c', '#b388ff', '#ffffff'];
+  for (let i = 0; i < 80; i++) {
+    const c = document.createElement('div');
+    c.className = 'confetti';
+    c.style.left = Math.random() * 100 + 'vw';
+    c.style.background = colours[i % colours.length];
+    c.style.animationDuration = 1.6 + Math.random() * 1.6 + 's';
+    c.style.animationDelay = Math.random() * 0.4 + 's';
+    c.style.transform = 'rotate(' + Math.random() * 360 + 'deg)';
+    document.body.appendChild(c);
+    setTimeout(() => c.remove(), 3800);
+  }
 }
 
 /* ---------- charts (plain SVG) ---------- */
@@ -844,7 +914,9 @@ function init() {
     S.tab = b.dataset.tab; window.scrollTo(0, 0); render();
   }));
   $('#refresh').addEventListener('click', () => load(true));
-  $('#settings').addEventListener('click', () => showSetup(true));
+  $('#settings').addEventListener('click', openSettings);
+  applyTheme(S.theme);
+  window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => applyTheme(S.theme));
   $('#save').addEventListener('click', saveLink);
   $('#link').addEventListener('keydown', (e) => { if (e.key === 'Enter') saveLink(); });
   $('#cancelSetup').addEventListener('click', () => { $('#setup').hidden = true; });
