@@ -268,6 +268,7 @@ function render() {
   const view = $('#view');
   const form = $('#addForm');
   if (S.tab === 'add' && form && form.contains(document.activeElement)) return; // don't wipe the form while typing
+  if (!VIEWS[S.tab]) S.tab = 'overview';
   view.innerHTML = VIEWS[S.tab]();
   bindView();
   drawCharts();
@@ -548,7 +549,7 @@ function bindAdd() {
 
 async function submitBet() {
   const f = S.form, msg = $('#addMsg'), btn = $('#addBtn');
-  const err = (t) => { msg.textContent = t; msg.className = 'small err'; };
+  const err = (t) => { msg.textContent = t; msg.className = 'small err'; msg.scrollIntoView({ block: 'center', behavior: 'smooth' }); toast(t.length > 40 ? 'Not saved, see message' : t); };
   if (!f.book.trim()) return err('Add the bookmaker.');
   if (!f.type) return err('Pick a bet type.');
   for (const [k, label] of [['backOdds', 'Back odds'], ['amount', 'Stake'], ['layOdds', 'Lay odds']]) {
@@ -563,11 +564,12 @@ async function submitBet() {
     backOdds: pnum(f.backOdds), stake: snr ? 0 : amt || 0, freeBet: snr ? amt || 0 : 0,
     layOdds: pnum(f.layOdds), layReturn: fig.layReturn, liability: fig.liability, expected: fig.expected
   };
-  btn.disabled = true; btn.textContent = 'Adding…'; msg.textContent = ''; msg.className = 'small';
+  btn.disabled = true; btn.textContent = 'Adding…'; msg.textContent = 'Sending to your sheet…'; msg.className = 'small muted';
   try {
     await postSheet({ action: 'add', bet });
     S.form = { type: f.type, book: '', match: f.match, backOdds: '', amount: '', layOdds: '', over: {} };
     toast('Bet added');
+    msg.textContent = 'Added to your sheet.'; msg.className = 'small pos';
     if (document.activeElement) document.activeElement.blur();
     await load(false);
   } catch (e) {
@@ -583,7 +585,11 @@ async function postSheet(payload) {
   let res;
   try {
     res = await fetch(link, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload), redirect: 'follow' });
-  } catch (e) { throw new Error('No connection to your sheet. Nothing was saved.'); }
+  } catch (e) {
+    throw new Error(navigator.onLine === false
+      ? 'You are offline. Nothing was saved.'
+      : 'Your sheet would not accept it. In Apps Script, check you did Deploy > Manage deployments > edit > Version: New version > Deploy. Nothing was saved.');
+  }
   let j;
   try { j = await res.json(); } catch (e) { throw new Error('Your sheet did not accept it. Check you redeployed the script as a new version.'); }
   if (!j || !j.ok) throw new Error((j && j.error) || 'Your sheet said no');
