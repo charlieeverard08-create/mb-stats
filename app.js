@@ -453,7 +453,7 @@ function calcBet(type, backOdds, amount, layOdds, commissionPct) {
   const liability = layStake * (lo - 1);
   const backWins = (snr ? amt * (bo - 1) : amt * (bo - 1)) - liability;
   const layWins = layStake * (1 - c) - (snr ? 0 : amt);
-  return { snr, layStake: r2(layStake), layReturn: r2(backReturn), liability: r2(liability), expected: r2(Math.min(backWins, layWins)), backWins: r2(backWins), layWins: r2(layWins) };
+  return { snr, layStake: r2(layStake), layReturn: r2(layStake * lo), liability: r2(liability), expected: r2(Math.min(backWins, layWins)), backWins: r2(backWins), layWins: r2(layWins) };
 }
 
 VIEWS.add = function () {
@@ -602,12 +602,14 @@ function openSettle(b) {
   // Prefer the figures already in the sheet for the outcomes.
   const snr = SNR_TYPES.includes(b.type);
   let backWins = null, layWins = null;
-  if (b.backOdds && b.layOdds && b.liability != null) {
-    const amt = snr ? b.fb : b.stake;
-    const layStake = b.liability / (b.layOdds - 1);
-    backWins = r2(n0(amt) * (b.backOdds - 1) - b.liability);
-    layWins = r2(layStake * (1 - (S.commission || 0) / 100) - (snr ? 0 : n0(amt)));
-  } else if (calc) { backWins = calc.backWins; layWins = calc.layWins; }
+  // Uses the figures in your sheet: lay stake = Lay Return - Lay Liability.
+  const amt = n0(snr ? b.fb : b.stake);
+  const layStake = b.layReturn != null && b.liability != null ? b.layReturn - b.liability
+    : b.liability != null && b.layOdds > 1 ? b.liability / (b.layOdds - 1) : null;
+  if (b.backOdds && b.liability != null) backWins = r2(amt * (b.backOdds - 1) - b.liability);
+  if (layStake != null) layWins = r2(layStake * (1 - (S.commission || 0) / 100) - (snr ? 0 : amt));
+  if (backWins == null && calc) backWins = calc.backWins;
+  if (layWins == null && calc) layWins = calc.layWins;
   const start = b.expected != null ? b.expected : '';
   const sheet = $('#sheet');
   sheet.innerHTML = `<div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="st-title">
