@@ -69,7 +69,7 @@ const S = {
   error: '',
   form: { type: '', book: '', match: '', backOdds: '', amount: '', layOdds: '', over: {} },
   commission: prefs.commission != null ? prefs.commission : 0,
-  theme: ['auto', 'dark', 'light', 'party'].includes(prefs.theme) ? prefs.theme : 'auto',
+  theme: ['auto', 'dark', 'light', 'temple', 'party'].includes(prefs.theme) ? prefs.theme : 'auto',
   saving: false
 };
 const savePrefs = () => store.set(PREF_KEY, JSON.stringify({ period: S.period, bookSort: S.bookSort, commission: S.commission, theme: S.theme }));
@@ -674,13 +674,13 @@ function closeSettle() {
 }
 
 /* ---------- settings & themes ---------- */
-const THEMES = [['auto', 'Auto'], ['dark', 'Dark'], ['light', 'Light'], ['party', 'Party']];
-const THEME_BAR = { dark: '#0e1116', light: '#f5f6f8', party: '#ff3cac' };
+const THEMES = [['auto', 'Auto'], ['dark', 'Dark'], ['light', 'Light'], ['temple', 'Temple'], ['party', 'Party']];
+const THEME_BAR = { dark: '#0e1116', light: '#f5f6f8', party: '#ff3cac', temple: '#123524' };
 
 function applyTheme(t) {
   document.documentElement.setAttribute('data-theme', t);
   const light = t === 'light' || (t === 'auto' && window.matchMedia('(prefers-color-scheme: light)').matches);
-  const bar = t === 'party' ? THEME_BAR.party : light ? THEME_BAR.light : THEME_BAR.dark;
+  const bar = THEME_BAR[t] && t !== 'dark' && t !== 'light' ? THEME_BAR[t] : light ? THEME_BAR.light : THEME_BAR.dark;
   const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.setAttribute('content', bar);
   if (S.data) drawCharts(); // charts read colours at draw time
 }
@@ -703,7 +703,7 @@ function openSettings() {
   $$('[data-theme-pick]', sheet).forEach((b) => b.addEventListener('click', () => {
     S.theme = b.dataset.themePick; savePrefs(); applyTheme(S.theme);
     $$('[data-theme-pick]', sheet).forEach((o) => o.setAttribute('aria-pressed', String(o === b)));
-    if (S.theme === 'party') confetti();
+    if (S.theme === 'party' || S.theme === 'temple') confetti();
   }));
   const comm = $('#set-comm');
   comm.addEventListener('input', () => { const v = pnum(comm.value); S.commission = v == null ? 0 : v; savePrefs(); if (S.tab === 'add') renderCalc(); });
@@ -713,7 +713,9 @@ function openSettings() {
 }
 
 function confetti() {
-  if (S.theme !== 'party' || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  if (S.theme === 'temple') { rockfall(); return; }
+  if (S.theme !== 'party') return;
   const colours = ['#ff3cac', '#ffe53b', '#00f5ff', '#00f5a0', '#ff9a3c', '#b388ff', '#ffffff'];
   for (let i = 0; i < 80; i++) {
     const c = document.createElement('div');
@@ -725,6 +727,22 @@ function confetti() {
     c.style.transform = 'rotate(' + Math.random() * 360 + 'deg)';
     document.body.appendChild(c);
     setTimeout(() => c.remove(), 3800);
+  }
+}
+
+// Temple mode: carved stone blocks tumble down the screen.
+function rockfall() {
+  for (let i = 0; i < 26; i++) {
+    const r = document.createElement('div');
+    const size = 18 + Math.random() * 26;
+    r.className = 'rock';
+    r.style.width = size + 'px'; r.style.height = size * (0.8 + Math.random() * 0.4) + 'px';
+    r.style.left = Math.random() * 100 + 'vw';
+    r.style.setProperty('--spin', (Math.random() * 120 - 60) + 'deg');
+    r.style.animationDuration = 1.1 + Math.random() * 0.9 + 's';
+    r.style.animationDelay = Math.random() * 0.5 + 's';
+    document.body.appendChild(r);
+    setTimeout(() => r.remove(), 2800);
   }
 }
 
