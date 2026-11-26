@@ -153,7 +153,7 @@ button, input, select { font: inherit; color: inherit; }
 /* Tab bar */
 .tabbar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
-  display: grid; grid-template-columns: repeat(4, 1fr);
+  display: grid; grid-template-columns: repeat(5, 1fr);
   background: color-mix(in srgb, var(--panel) 92%, transparent);
   backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
   border-top: 1px solid var(--line);
@@ -187,3 +187,47 @@ button, input, select { font: inherit; color: inherit; }
 .banner { background: var(--panel); border: 1px solid var(--warn); color: var(--fg); border-radius: 12px; padding: 10px 12px; font-size: 13px; }
 
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* Add tab */
+body.on-add .filters { display: none; }
+.tabbar .tab-add .plus { width: 34px; height: 28px; border-radius: 10px; background: var(--accent); color: #062417; display: grid; place-items: center; }
+.tabbar .tab-add .plus svg { width: 18px; height: 18px; color: #062417; }
+.tabbar .tab-add[aria-current="page"] .plus { box-shadow: 0 0 0 3px var(--accent-soft); }
+.tabbar .tab-add[aria-current="page"] svg { color: #062417; }
+.form { display: flex; flex-direction: column; gap: 8px; }
+.fl { font-size: 12.5px; color: var(--muted); margin-top: 6px; display: block; }
+.input { width: 100%; padding: 12px 13px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel2); font-size: 16px; outline: none; min-width: 0; }
+.input:focus { border-color: var(--accent); }
+.input.narrow { max-width: 120px; }
+.chips.wrap { flex-wrap: wrap; overflow: visible; }
+.chip.sm { padding: 5px 10px; font-size: 12.5px; color: var(--muted); }
+.grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.calc { background: var(--panel2); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin-top: 8px; }
+.calc-empty { color: var(--muted); font-size: 13px; }
+.calc-main { font-size: 22px; font-variant-numeric: tabular-nums; }
+.calc-main b { font-weight: 700; }
+.calc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; margin-top: 10px; font-variant-numeric: tabular-nums; }
+.calc-grid div { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.calc-grid b { font-size: 15px; }
+.adjust { margin-top: 4px; }
+.adjust summary { cursor: pointer; color: var(--muted); font-size: 13px; padding: 6px 0; }
+.adjust p { margin: 2px 0 6px; }
+.form .primary { margin-top: 10px; }
+.small.err, #addMsg.err, #st-msg.err { color: var(--bad); }
+.hint { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+.bet.tap { cursor: pointer; }
+.settle-hint { font-size: 11.5px; color: var(--warn); margin-top: 6px; }
+
+/* Settle sheet */
+.sheet-wrap { position: fixed; inset: 0; z-index: 40; background: rgba(0, 0, 0, 0); display: flex; align-items: flex-end; justify-content: center; transition: background 0.2s; }
+.sheet-wrap.show { background: rgba(0, 0, 0, 0.55); }
+.sheet-card { width: 100%; max-width: 560px; background: var(--panel); border: 1px solid var(--line); border-bottom: 0; border-radius: 22px 22px 0 0; padding: 10px 18px calc(18px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 8px; transform: translateY(100%); transition: transform 0.2s ease-out; }
+.sheet-wrap.show .sheet-card { transform: none; }
+.sheet-card h2 { margin: 4px 0 0; font-size: 18px; }
+.sheet-card .sub { margin: 0 0 6px; font-size: 12.5px; color: var(--muted); }
+.grab { width: 40px; height: 4px; border-radius: 2px; background: var(--line); margin: 2px auto 6px; }
+.outcomes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.outcome { border: 1px solid var(--line); background: var(--panel2); border-radius: 14px; padding: 12px; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; cursor: pointer; text-align: left; }
+.outcome span { font-size: 12px; color: var(--muted); }
+.outcome b { font-size: 17px; font-variant-numeric: tabular-nums; }
+.outcome.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
