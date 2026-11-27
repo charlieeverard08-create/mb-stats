@@ -630,3 +630,7 @@ body { font-family: var(--font); -webkit-font-smoothing: antialiased; }
 @media (max-width: 380px) { .seg button { font-size: 12.5px; padding: 8px 4px; } }
 [data-theme="party"] body, [data-theme="temple"] body { min-height: 100vh; }
 @media (min-width: 800px) { .tabbar { max-width: 760px; margin: 0 auto; border-radius: 24px 24px 0 0; } }
+
+.logo-fix { display: grid; grid-template-columns: 1fr 1.2fr auto; gap: 8px; align-items: center; }
+.logo-fix .select, .logo-fix .input { min-width: 0; width: 100%; }
+#lg-msg .av { width: 26px; height: 26px; display: inline-grid; vertical-align: middle; margin-left: 6px; font-size: 10px; }

@@ -342,12 +342,17 @@ function avatar(name) {
   const ini = (words.length > 1 ? words[0][0] + words[1][0] : n.replace(/[^A-Za-z0-9]/g, '').slice(0, 2)).toUpperCase() || '?';
   let h = 0; for (const ch of n.toLowerCase()) h = (h * 31 + ch.charCodeAt(0)) % 360;
   const key = logoKey(n);
-  const known = LOGO_CACHE[key];
+  const known = LOGO_SITES[key] && LOGO_CACHE[key] !== LOGO_SITES[key] ? undefined : LOGO_CACHE[key];
   if (known === 'none' || !key) return `<span class="av" style="--h:${h}" aria-hidden="true">${esc(ini)}</span>`;
   const cands = known ? [known] : logoCandidates(key);
   return `<span class="av${known ? ' has-logo' : ''}" style="--h:${h}" aria-hidden="true"><i>${esc(ini)}</i><img alt="" referrerpolicy="no-referrer" decoding="async" data-key="${esc(key)}" data-cands="${esc(cands.slice(1).join('|'))}" src="${logoUrl(cands[0])}"></span>`;
 }
 
+function logoBookies() {
+  const seen = new Map();
+  for (const b of (S.data && S.data.bets) || []) { const k = logoKey(b.book); if (k && !seen.has(k)) seen.set(k, b.book); }
+  return Array.from(seen.values()).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+}
 // ---------- Bookie logos (automatic) ----------
 // Each bookie's own site icon, fetched from Google's favicon service.
 // Known names map to their real site; anything else tries name.com then name.co.uk.
@@ -359,7 +364,7 @@ const LOGO_DOMAINS = {
   'betmgm': 'betmgm.co.uk', 'betstgeorge': 'betstgeorge.com', 'betuk': 'betuk.com', 'betvictor': 'betvictor.com',
   'betano': 'betano.co.uk', 'betfair': 'betfair.com', 'betfred': 'betfred.com', 'betfed': 'betfred.com',
   'betnero': 'betnero.com', 'betway': 'betway.com', 'boyle': 'boylesports.com', 'boylesport': 'boylesports.com',
-  'boylesports': 'boylesports.com', 'coral': 'coral.co.uk', 'daznbet': 'daznbet.co.uk', 'dabble': 'dabble.com',
+  'boylesports': 'boylesports.com', 'coral': 'coral.co.uk', 'daznbet': 'daznbet.com|dazn.com', 'dabble': 'dabble.com',
   'dragonbet': 'dragonbet.co.uk', 'dreamvegas': 'dreamvegas.com', 'fairplay': 'fairplay.co.uk', 'fanteam': 'fanteam.com',
   'fitzwilliam': 'fitzwilliambet.com', 'grandivy': 'grandivy.com', 'grosvenor': 'grosvenorcasinos.com',
   'highbet': 'highbet.com', 'hollywood': 'hollywoodbets.co.uk', 'hollywoodbets': 'hollywoodbets.co.uk',
@@ -375,12 +380,29 @@ const LOGO_DOMAINS = {
   'matchbook': 'matchbook.com', 'betdaq': 'betdaq.com', 'mrgreen': 'mrgreen.com', 'casumo': 'casumo.com',
   'pokerstars': 'pokerstars.uk', 'mrq': 'mrq.com', 'jackpotjoy': 'jackpotjoy.com', 'buzzbingo': 'buzzbingo.com',
 };
-let LOGO_CACHE = {};
+// Bump LOGO_VER whenever the list changes so bookies that found nothing get another try.
+const LOGO_VER = 2;
+let LOGO_CACHE = {}, LOGO_SITES = {};
 try { LOGO_CACHE = JSON.parse(localStorage.getItem('mb.logos') || '{}') || {}; } catch (e) { LOGO_CACHE = {}; }
+try { LOGO_SITES = JSON.parse(localStorage.getItem('mb.logoSites') || '{}') || {}; } catch (e) { LOGO_SITES = {}; }
+try {
+  if (Number(localStorage.getItem('mb.logosVer')) !== LOGO_VER) {
+    for (const k of Object.keys(LOGO_CACHE)) if (LOGO_CACHE[k] === 'none') delete LOGO_CACHE[k];
+    localStorage.setItem('mb.logos', JSON.stringify(LOGO_CACHE)); localStorage.setItem('mb.logosVer', String(LOGO_VER));
+  }
+} catch (e) {}
+// Turn whatever was pasted ("https://www.daznbet.com/en-gb/sports") into a bare domain.
+function cleanDomain(v) {
+  v = String(v || '').trim().toLowerCase();
+  if (!v) return '';
+  try { v = new URL(/^[a-z]+:\/\//.test(v) ? v : 'https://' + v).hostname; } catch (e) { return ''; }
+  return v.replace(/^www\./, '');
+}
 function logoKey(name) { return String(name || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
 function logoCandidates(key) {
   const out = [];
-  if (LOGO_DOMAINS[key]) out.push(LOGO_DOMAINS[key]);
+  if (LOGO_SITES[key]) out.push(LOGO_SITES[key]);
+  if (LOGO_DOMAINS[key]) out.push(...LOGO_DOMAINS[key].split('|'));
   for (const d of [key + '.com', key + '.co.uk', key + '.bet']) if (!out.includes(d)) out.push(d);
   return out;
 }
@@ -1977,6 +1999,14 @@ function openSettings() {
     <div class="fl">Theme</div>
     <div class="themes">${THEMES.map(([k, l]) => `<button type="button" class="theme-opt" data-theme-pick="${k}" aria-pressed="${S.theme === k}"><span class="swatch sw-${k}"></span>${l}</button>`).join('')}</div>
     <div class="set-row" style="margin-top:12px"><label for="set-comm">Exchange commission %</label><input id="set-comm" class="input" inputmode="decimal" value="${esc(S.commission)}"></div>
+    <div class="fl" style="margin-top:14px">Bookie logo</div>
+    <p class="muted small" style="margin:0 0 8px">Wrong or missing logo? Pick the bookie and paste its website.</p>
+    <div class="logo-fix">
+      <select id="lg-book" class="select" aria-label="Bookie">${logoBookies().map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join('')}</select>
+      <input id="lg-site" class="input" placeholder="e.g. daznbet.com" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Website">
+      <button type="button" class="chip fb-use" id="lg-save">Save</button>
+    </div>
+    <p class="muted small" id="lg-msg" style="margin:6px 0 0;min-height:1.2em" aria-live="polite"></p>
     <div class="set-row"><span>Sheet link</span><span class="muted small">${store.get(LINK_KEY) ? 'Connected' : 'Not connected'}</span></div>
     <button type="button" class="wide-btn" id="set-link">Change sheet link</button>
     <button type="button" class="text-btn" id="set-close">Done</button>
@@ -1992,6 +2022,20 @@ function openSettings() {
   comm.addEventListener('input', () => { const v = pnum(comm.value); S.commission = v == null ? 0 : v; savePrefs(); if (S.tab === 'add') renderCalc(); });
   $('#set-link').onclick = () => { closeSettle(); setTimeout(() => showSetup(true), 220); };
   $('#set-close').onclick = closeSettle;
+  const lgBook = $('#lg-book'), lgSite = $('#lg-site'), lgMsg = $('#lg-msg');
+  const showSite = () => { const k = logoKey(lgBook.value); lgSite.value = LOGO_SITES[k] || ''; };
+  if (lgBook) { lgBook.onchange = showSite; showSite(); }
+  $('#lg-save') && ($('#lg-save').onclick = () => {
+    const key = logoKey(lgBook.value); if (!key) return;
+    const d = cleanDomain(lgSite.value);
+    if (lgSite.value.trim() && !d) { lgMsg.textContent = "That doesn't look like a website."; return; }
+    if (d) LOGO_SITES[key] = d; else delete LOGO_SITES[key];
+    delete LOGO_CACHE[key];
+    try { localStorage.setItem('mb.logoSites', JSON.stringify(LOGO_SITES)); localStorage.setItem('mb.logos', JSON.stringify(LOGO_CACHE)); } catch (e) {}
+    lgSite.value = d;
+    lgMsg.innerHTML = d ? `Saved. ${avatar(lgBook.value)}` : 'Cleared, back to automatic.';
+    render();
+  });
   sheet.onclick = (e) => { if (e.target === sheet) closeSettle(); };
 }
 
