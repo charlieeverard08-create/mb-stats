@@ -341,8 +341,77 @@ function avatar(name) {
   const words = n.replace(/[^A-Za-z0-9 ]/g, ' ').split(/\s+/).filter(Boolean);
   const ini = (words.length > 1 ? words[0][0] + words[1][0] : n.replace(/[^A-Za-z0-9]/g, '').slice(0, 2)).toUpperCase() || '?';
   let h = 0; for (const ch of n.toLowerCase()) h = (h * 31 + ch.charCodeAt(0)) % 360;
-  return `<span class="av" style="--h:${h}" aria-hidden="true">${esc(ini)}</span>`;
+  const key = logoKey(n);
+  const known = LOGO_CACHE[key];
+  if (known === 'none' || !key) return `<span class="av" style="--h:${h}" aria-hidden="true">${esc(ini)}</span>`;
+  const cands = known ? [known] : logoCandidates(key);
+  return `<span class="av${known ? ' has-logo' : ''}" style="--h:${h}" aria-hidden="true"><i>${esc(ini)}</i><img alt="" referrerpolicy="no-referrer" decoding="async" data-key="${esc(key)}" data-cands="${esc(cands.slice(1).join('|'))}" src="${logoUrl(cands[0])}"></span>`;
 }
+
+// ---------- Bookie logos (automatic) ----------
+// Each bookie's own site icon, fetched from Google's favicon service.
+// Known names map to their real site; anything else tries name.com then name.co.uk.
+// Results are remembered on this device; if nothing is found the coloured letters stay.
+const LOGO_DOMAINS = {
+  '247bet': '247bet.com', '32red': '32red.com', '7bet': '7bet.co.uk', '888sport': '888sport.com',
+  'alfobet': 'alfobet.com', 'arrowbet': 'arrowbet.com', 'ballybet': 'ballybet.co.uk', 'barone': 'barone.co.uk',
+  'betvickers': 'betvickers.com', 'bet442': 'bet442.com', 'betahoy': 'betahoy.com', 'betgoodwin': 'betgoodwin.co.uk',
+  'betmgm': 'betmgm.co.uk', 'betstgeorge': 'betstgeorge.com', 'betuk': 'betuk.com', 'betvictor': 'betvictor.com',
+  'betano': 'betano.co.uk', 'betfair': 'betfair.com', 'betfred': 'betfred.com', 'betfed': 'betfred.com',
+  'betnero': 'betnero.com', 'betway': 'betway.com', 'boyle': 'boylesports.com', 'boylesport': 'boylesports.com',
+  'boylesports': 'boylesports.com', 'coral': 'coral.co.uk', 'daznbet': 'daznbet.co.uk', 'dabble': 'dabble.com',
+  'dragonbet': 'dragonbet.co.uk', 'dreamvegas': 'dreamvegas.com', 'fairplay': 'fairplay.co.uk', 'fanteam': 'fanteam.com',
+  'fitzwilliam': 'fitzwilliambet.com', 'grandivy': 'grandivy.com', 'grosvenor': 'grosvenorcasinos.com',
+  'highbet': 'highbet.com', 'hollywood': 'hollywoodbets.co.uk', 'hollywoodbets': 'hollywoodbets.co.uk',
+  'hotstreak': 'hotstreak.co.uk', 'ivybet': 'ivybet.com', 'kwiff': 'kwiff.com', 'ladbrokes': 'ladbrokes.com',
+  'leovegas': 'leovegas.com', 'livescore': 'livescorebet.com', 'livescorebet': 'livescorebet.com',
+  'luckymate': 'luckymate.com', 'luckytiger': 'luckytiger.co.uk', 'metabetting': 'metabetting.com',
+  'midnite': 'midnite.com', 'monopolycasino': 'monopolycasino.com', 'mrben': 'mrben.co.uk', 'nrg': 'nrg.bet',
+  'netbet': 'netbet.co.uk', 'paddypower': 'paddypower.com', 'parimatch': 'parimatch.co.uk', 'pricedup': 'pricedup.bet',
+  'properbet': 'properbet.com', 'quickbet': 'quickbet.co.uk', 'rightbet': 'rightbet.co.uk', 'skybet': 'skybet.com',
+  'smarkets': 'smarkets.com', 'starsports': 'starsports.bet', 'swiftysports': 'swiftysports.com', 'tote': 'tote.co.uk',
+  'unibet': 'unibet.co.uk', 'virginbet': 'virginbet.com', 'williamhill': 'williamhill.com', 'bwin': 'bwin.com',
+  'betfairexchange': 'betfair.com', 'sportingindex': 'sportingindex.com', 'spreadex': 'spreadex.com',
+  'matchbook': 'matchbook.com', 'betdaq': 'betdaq.com', 'mrgreen': 'mrgreen.com', 'casumo': 'casumo.com',
+  'pokerstars': 'pokerstars.uk', 'mrq': 'mrq.com', 'jackpotjoy': 'jackpotjoy.com', 'buzzbingo': 'buzzbingo.com',
+};
+let LOGO_CACHE = {};
+try { LOGO_CACHE = JSON.parse(localStorage.getItem('mb.logos') || '{}') || {}; } catch (e) { LOGO_CACHE = {}; }
+function logoKey(name) { return String(name || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
+function logoCandidates(key) {
+  const out = [];
+  if (LOGO_DOMAINS[key]) out.push(LOGO_DOMAINS[key]);
+  for (const d of [key + '.com', key + '.co.uk', key + '.bet']) if (!out.includes(d)) out.push(d);
+  return out;
+}
+function logoUrl(domain) { return 'https://www.google.com/s2/favicons?sz=128&domain=' + encodeURIComponent(domain); }
+function saveLogo(key, val) {
+  LOGO_CACHE[key] = val;
+  try { localStorage.setItem('mb.logos', JSON.stringify(LOGO_CACHE)); } catch (e) {}
+}
+function domainOf(src) { try { return new URL(src).searchParams.get('domain') || ''; } catch (e) { return ''; } }
+function logoNext(img) {
+  const rest = (img.dataset.cands || '').split('|').filter(Boolean);
+  if (rest.length) { img.dataset.cands = rest.slice(1).join('|'); img.src = logoUrl(rest[0]); return; }
+  // Only give up for good when we're online (a failed load offline proves nothing).
+  const had = LOGO_CACHE[img.dataset.key];
+  if (navigator.onLine !== false && !had) saveLogo(img.dataset.key, 'none');
+  const av = img.parentNode; img.remove(); if (av) av.classList.remove('has-logo');
+}
+// Google returns a tiny 16px grey globe when a site has no icon; treat that as "not found".
+document.addEventListener('load', e => {
+  const img = e.target;
+  if (!(img instanceof HTMLImageElement) || !img.dataset.key) return;
+  if (img.naturalWidth < 32) return logoNext(img);
+  img.parentNode.classList.add('has-logo');
+  if (LOGO_CACHE[img.dataset.key] !== domainOf(img.src)) saveLogo(img.dataset.key, domainOf(img.src));
+}, true);
+document.addEventListener('error', e => {
+  const img = e.target;
+  if (!(img instanceof HTMLImageElement) || !img.dataset.key) return;
+  if (navigator.onLine === false) { const av = img.parentNode; img.remove(); if (av) av.classList.remove('has-logo'); return; }
+  logoNext(img);
+}, true);
 
 function txnRow(b) {
   const issue = checkBet(b);
