@@ -69,6 +69,7 @@ const S = {
   error: '',
   form: { type: '', book: '', match: '', backOdds: '', amount: '', layOdds: '', over: {} },
   commission: prefs.commission != null ? prefs.commission : 0,
+  day: null, // null = today; otherwise 'YYYY-MM-DD'
   theme: ['auto', 'dark', 'light', 'temple', 'party'].includes(prefs.theme) ? prefs.theme : 'auto',
   saving: false
 };
@@ -301,6 +302,7 @@ const VIEWS = {
     const cmp = k.hasPrev ? ` That's <b class="${k.diff >= 0 ? 'pos' : 'neg'}">${gbp(Math.abs(k.diff))}</b> ${k.diff >= 0 ? 'more than' : 'less than'} ${P.prevLabel}.` : '';
     const where = S.book ? ` at <b>${esc(S.book)}</b>` : '';
     return `<div class="stack">
+      ${dayCard()}
       <p class="lede"><b>${gbp(k.profit)}</b> profit from <b>${int(k.settled)}</b> settled bets ${esc(P.phrase)}${where}.${cmp}</p>
       <div class="kpis">
         <div class="kpi hero"><div class="label">Profit</div><div class="big ${tone(k.profit)}">${gbp(k.profit)}</div><div class="foot">${int(k.settled)} settled bets ${esc(P.phrase)}</div></div>
@@ -374,6 +376,46 @@ const VIEWS = {
   }
 };
 
+// Daily overview: bets placed on one day (follows the bookmaker filter, ignores the time buttons).
+function dayCard() {
+  const today = iso(new Date());
+  const day = S.day || today;
+  const yesterday = iso(addDays(new Date(), -1));
+  const title = day === today ? 'Today' : day === yesterday ? 'Yesterday' : parseIso(day).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short' });
+  const bets = S.data.bets.filter((b) => b.date === day && (!S.book || b.book === S.book));
+  const settled = bets.filter((b) => b.status === 'settled');
+  const open = bets.filter((b) => b.status === 'open');
+  const expected = r2(sum(bets, (b) => b.expected));
+  const actual = r2(sum(settled, (b) => b.profit));
+  const settledExp = r2(sum(settled, (b) => b.expected));
+  const diff = r2(actual - settledExp);
+  const openExp = r2(sum(open, (b) => b.expected));
+  const pct = bets.length ? Math.round((settled.length / bets.length) * 100) : 0;
+  const list = bets.map((b) => `
+    <div class="row${b.status === 'open' ? ' tap' : ''}"${b.status === 'open' ? ` data-open="${b.row}"` : ''}>
+      <div class="main"><div class="title">${esc(b.match || b.book)}</div><div class="meta">${esc(b.book)} · ${esc(b.type)}${b.time && b.time !== '00:00' ? ' · ' + esc(b.time) : ''}</div></div>
+      <div class="right"><div class="amt ${b.status === 'open' ? '' : tone(b.profit)}">${b.status === 'open' ? '<span class="tag open">Open</span>' : signed(b.profit)}</div><div class="meta">exp. ${signed(b.expected)}</div></div>
+    </div>`).join('');
+  return `<section class="card day-card" id="day">
+    <div class="day-head">
+      <button type="button" class="icon-btn day-nav" data-day="-1" aria-label="Previous day">‹</button>
+      <div class="day-title"><h2>${esc(title)}</h2><p class="sub">${fmtDay(day)} · ${int(bets.length)} ${bets.length === 1 ? 'bet' : 'bets'}${S.book ? ' at ' + esc(S.book) : ''}</p></div>
+      <button type="button" class="icon-btn day-nav" data-day="1" aria-label="Next day"${day === today ? ' disabled' : ''}>›</button>
+    </div>
+    ${bets.length ? `
+    <div class="day-grid">
+      <div><span>Expected</span><b class="${tone(expected)}">${signed(expected)}</b></div>
+      <div><span>Actual</span><b class="${tone(actual)}">${signed(actual)}</b></div>
+      <div><span>vs expected</span><b class="${tone(diff)}">${settled.length ? signed(diff) : '—'}</b></div>
+    </div>
+    <div class="day-progress"><i style="width:${pct}%"></i></div>
+    <p class="day-note">${int(settled.length)} of ${int(bets.length)} settled${open.length ? ` · ${signed(openExp)} still to come from ${int(open.length)} open` : ''}</p>
+    <details class="day-bets"><summary>See ${bets.length === 1 ? 'the bet' : 'all ' + int(bets.length) + ' bets'}</summary><div class="list">${list}</div></details>`
+    : `<div class="empty">No bets placed ${day === today ? 'yet today' : 'on this day'}.</div>`}
+    ${S.day ? '<button type="button" class="text-btn day-back" id="dayToday">Back to today</button>' : ''}
+  </section>`;
+}
+
 function openList() {
   if (!C.open.length) return `<div class="empty">No open bets right now.</div>`;
   return `<div class="list">${C.open.map((b) => `
@@ -421,6 +463,13 @@ function bindView() {
   if (q) q.addEventListener('input', () => { S.q = q.value; S.betLimit = 40; refreshBetList(); });
   bindMore();
   bindOpen(document);
+  $$('[data-day]').forEach((b) => b.addEventListener('click', () => {
+    const today = iso(new Date());
+    const next = iso(addDays(parseIso(S.day || today), Number(b.dataset.day)));
+    S.day = next >= today ? null : next;
+    render();
+  }));
+  const dt = $('#dayToday'); if (dt) dt.onclick = () => { S.day = null; render(); };
   if (S.tab === 'add') bindAdd();
 }
 function bindOpen(root) {

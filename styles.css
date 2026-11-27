@@ -373,3 +373,25 @@ body.on-add .filters { display: none; }
   animation: rock-fall cubic-bezier(0.45, 0, 0.9, 0.6) forwards; }
 @keyframes rock-fall { to { transform: translateY(110vh) rotate(var(--spin, 40deg)); } }
 @media (prefers-reduced-motion: reduce) { .rock { display: none; } }
+
+/* Daily overview */
+.day-head { display: flex; align-items: center; gap: 10px; }
+.day-title { flex: 1; min-width: 0; text-align: center; }
+.day-title .sub { margin: 2px 0 0; }
+.day-nav { font-size: 22px; line-height: 1; flex: none; }
+.day-nav:disabled { opacity: 0.35; cursor: default; }
+.day-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 14px; }
+.day-grid div { background: var(--panel2); border: 1px solid var(--line); border-radius: 12px; padding: 10px; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.day-grid span { font-size: 11.5px; color: var(--muted); }
+.day-grid b { font-size: 18px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.day-progress { height: 6px; border-radius: 3px; background: var(--panel2); margin-top: 12px; overflow: hidden; }
+.day-progress i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.day-note { font-size: 12px; color: var(--muted); margin: 6px 0 0; line-height: 1.4; }
+.day-bets { margin-top: 8px; }
+.day-bets summary { cursor: pointer; font-size: 13px; color: var(--accent); padding: 6px 0; }
+.day-back { display: block; margin: 6px auto 0; }
+[data-theme="party"] .day-card { background: linear-gradient(135deg, rgba(255, 60, 172, 0.35), rgba(0, 201, 255, 0.35)); }
+[data-theme="party"] .day-grid div { background: rgba(255, 255, 255, 0.18); }
+[data-theme="party"] .day-progress i { background: linear-gradient(90deg, #ff3cac, #ffe53b, #00f5a0); }
+[data-theme="temple"] .day-progress i { background: linear-gradient(90deg, #a9770a, #f2c14e, #fff3b0); }
+[data-theme="temple"] .day-grid div { background: #3a332a; }
