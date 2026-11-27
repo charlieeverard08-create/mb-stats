@@ -1518,12 +1518,18 @@ function casinoMenuLine() {
   return `${open} in progress · ${signed(month)} this month`;
 }
 
-// Expected value of a wagering offer: what you get, minus what wagering it through is expected to cost.
+// Expected value of a casino offer.
+// Free spins pay back their value x RTP on average; any amount you have to play (to qualify or to clear a bonus)
+// costs that amount x house edge on average. Bonus cash and cashback count at face value.
+function casinoEVParts(bonus, wagerReq, rtp, type) {
+  const b = n0(bonus), w = n0(wagerReq), r = (rtp == null ? 96 : rtp) / 100, edge = 1 - r;
+  const value = type === 'Free spins' ? b * r : b;
+  const cost = w * edge;
+  return { value: r2(value), cost: r2(cost), ev: r2(value - cost), spins: type === 'Free spins', r };
+}
 function casinoEV(bonus, wagerReq, rtp, deposit, type) {
-  const b = n0(bonus), w = n0(wagerReq), edge = 1 - (rtp == null ? 96 : rtp) / 100;
-  if (!b && !w) return null;
-  if (type === 'Cashback') return r2(b);
-  return r2(b - w * edge);
+  if (!n0(bonus) && !n0(wagerReq)) return null;
+  return casinoEVParts(bonus, wagerReq, rtp, type).ev;
 }
 
 VIEWS.casino = function () {
@@ -1642,12 +1648,13 @@ function openCasinoForm(x) {
     <div class="edit-grid">
       <div><label class="fl" for="cf-dep">Deposit £</label><input id="cf-dep" class="input" inputmode="decimal" value="${v(o.deposit)}" placeholder="0"></div>
       <div><label class="fl" for="cf-bon" id="cf-bon-l">Bonus / spins value £</label><input id="cf-bon" class="input" inputmode="decimal" value="${v(o.bonus)}" placeholder="e.g. 10"></div>
-      <div><label class="fl" for="cf-wr">Wagering required £</label><input id="cf-wr" class="input" inputmode="decimal" value="${v(o.wagerReq)}" placeholder="0 if none"></div>
+      <div><label class="fl" for="cf-wr">Amount to play £</label><input id="cf-wr" class="input" inputmode="decimal" value="${v(o.wagerReq)}" placeholder="0 if none"></div>
       <div><label class="fl" for="cf-x">or × bonus</label><input id="cf-x" class="input" inputmode="decimal" placeholder="e.g. 10"></div>
       <div><label class="fl" for="cf-rtp">Game RTP %</label><input id="cf-rtp" class="input" inputmode="decimal" value="${esc(rtp)}"></div>
       <div><label class="fl" for="cf-exp">Expected £</label><input id="cf-exp" class="input" inputmode="text" value="${v(o.expected)}"></div>
     </div>
     <p class="small muted" id="cf-ev"></p>
+    <p class="small muted">Amount to play: everything you have to wager, including any "play £10 to get…" step. Depositing alone costs nothing.</p>
     ${editing ? `<div class="edit-grid">
       <div><label class="fl" for="cf-wag">Wagered so far £</label><input id="cf-wag" class="input" inputmode="decimal" value="${v(o.wagered)}"></div>
       <div><label class="fl" for="cf-res">Result £</label><input id="cf-res" class="input" inputmode="text" value="${v(o.result)}" placeholder="When finished"></div>
@@ -1664,8 +1671,12 @@ function openCasinoForm(x) {
   const msg = $('#cf-msg', sheet);
   const fail = (t) => { msg.textContent = t; msg.className = 'small err'; };
   const updateEV = () => {
-    const ev = casinoEV(pnum($('#cf-bon').value), pnum($('#cf-wr').value), pnum($('#cf-rtp').value), pnum($('#cf-dep').value), type);
-    $('#cf-ev').textContent = ev == null ? 'Expected = bonus minus the expected cost of wagering it (wagering × house edge).' : `Worked out: ${signed(ev)} (bonus ${gbp(n0(pnum($('#cf-bon').value)))} minus ${gbp(r2(n0(pnum($('#cf-wr').value)) * (1 - n0(pnum($('#cf-rtp').value) ?? 96) / 100)))} expected wagering cost).`;
+    const bon = pnum($('#cf-bon').value), wr = pnum($('#cf-wr').value), rtpv = pnum($('#cf-rtp').value);
+    const ev = casinoEV(bon, wr, rtpv, pnum($('#cf-dep').value), type);
+    const p = casinoEVParts(bon, wr, rtpv, type);
+    $('#cf-ev').textContent = ev == null
+      ? 'Expected = what the offer is worth, minus the average cost of anything you have to play (amount played × house edge).'
+      : `Worked out: ${signed(ev)}. ${p.spins ? `Spins worth ${gbp(n0(bon))} × ${Math.round(p.r * 1000) / 10}% RTP = ${gbp(p.value)}` : `${type === 'Cashback' ? 'Cashback' : 'Bonus'} ${gbp(p.value)}`}${p.cost ? `, minus ${gbp(p.cost)} average cost of playing ${gbp(n0(wr))}` : ''}.`;
     if (!expTouched && ev != null) $('#cf-exp').value = ev;
   };
   $$('[data-ctype]', sheet).forEach((b) => b.addEventListener('click', () => { type = b.dataset.ctype; $$('[data-ctype]', sheet).forEach((x2) => x2.setAttribute('aria-pressed', String(x2 === b))); $('#cf-bon-l').textContent = type === 'Free spins' ? 'Spins value £' : type === 'Cashback' ? 'Cashback £' : 'Bonus £'; updateEV(); }));
