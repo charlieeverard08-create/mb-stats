@@ -79,7 +79,7 @@ function blankForm() {
   return { type: '', book: '', match: '', backOdds: '', amount: '', layOdds: '', over: {}, freeBetId: '', mode: 'standard', customLay: '', refund: '', keep: '', ewTerms: '0.25', placeLay: '' };
 }
 S.form = blankForm();
-const savePrefs = () => store.set(PREF_KEY, JSON.stringify({ period: S.period, bookSort: S.bookSort, commission: S.commission, theme: S.theme, rtp: prefs.rtp }));
+const savePrefs = () => store.set(PREF_KEY, JSON.stringify({ period: S.period, bookSort: S.bookSort, commission: S.commission, theme: S.theme, rtp: prefs.rtp, srtp: prefs.srtp }));
 
 const PERIODS = [
   ['month', 'Month'],
@@ -1521,15 +1521,19 @@ function casinoMenuLine() {
 // Expected value of a casino offer.
 // Free spins pay back their value x RTP on average; any amount you have to play (to qualify or to clear a bonus)
 // costs that amount x house edge on average. Bonus cash and cashback count at face value.
-function casinoEVParts(bonus, wagerReq, rtp, type) {
-  const b = n0(bonus), w = n0(wagerReq), r = (rtp == null ? 96 : rtp) / 100, edge = 1 - r;
-  const value = type === 'Free spins' ? b * r : b;
-  const cost = w * edge;
-  return { value: r2(value), cost: r2(cost), ev: r2(value - cost), spins: type === 'Free spins', r };
+// play: amount you have to play; playRtp: RTP of that game; spinsRtp: RTP of the free spins game.
+function casinoEVParts(bonus, play, playRtp, type, spinsRtp) {
+  const b = n0(bonus), w = n0(play);
+  const pr = (playRtp == null ? 96 : playRtp) / 100;
+  const sr = (spinsRtp == null ? (playRtp == null ? 96 : playRtp) : spinsRtp) / 100;
+  const spins = type === 'Free spins';
+  const back = w * pr; // what playing returns on average
+  const value = spins ? b * sr : b;
+  return { spins, pr, sr, play: r2(w), back: r2(back), playLoss: r2(back - w), value: r2(value), ev: r2(value + back - w) };
 }
-function casinoEV(bonus, wagerReq, rtp, deposit, type) {
-  if (!n0(bonus) && !n0(wagerReq)) return null;
-  return casinoEVParts(bonus, wagerReq, rtp, type).ev;
+function casinoEV(bonus, play, playRtp, deposit, type, spinsRtp) {
+  if (!n0(bonus) && !n0(play)) return null;
+  return casinoEVParts(bonus, play, playRtp, type, spinsRtp).ev;
 }
 
 VIEWS.casino = function () {
@@ -1647,14 +1651,17 @@ function openCasinoForm(x) {
     <div class="chips wrap" id="cf-types">${CASINO_TYPES.map((t) => `<button type="button" class="chip sm" data-ctype="${esc(t)}" aria-pressed="${o.type === t}">${esc(t)}</button>`).join('')}</div>
     <div class="edit-grid">
       <div><label class="fl" for="cf-dep">Deposit £</label><input id="cf-dep" class="input" inputmode="decimal" value="${v(o.deposit)}" placeholder="0"></div>
-      <div><label class="fl" for="cf-bon" id="cf-bon-l">Bonus / spins value £</label><input id="cf-bon" class="input" inputmode="decimal" value="${v(o.bonus)}" placeholder="e.g. 10"></div>
       <div><label class="fl" for="cf-wr">Amount to play £</label><input id="cf-wr" class="input" inputmode="decimal" value="${v(o.wagerReq)}" placeholder="0 if none"></div>
-      <div><label class="fl" for="cf-x">or × bonus</label><input id="cf-x" class="input" inputmode="decimal" placeholder="e.g. 10"></div>
-      <div><label class="fl" for="cf-rtp">Game RTP %</label><input id="cf-rtp" class="input" inputmode="decimal" value="${esc(rtp)}"></div>
-      <div><label class="fl" for="cf-exp">Expected £</label><input id="cf-exp" class="input" inputmode="text" value="${v(o.expected)}"></div>
+      <div class="spins-only"><label class="fl" for="cf-spn">Number of spins</label><input id="cf-spn" class="input" inputmode="numeric" placeholder="e.g. 30"></div>
+      <div class="spins-only"><label class="fl" for="cf-spv">Value per spin £</label><input id="cf-spv" class="input" inputmode="decimal" placeholder="e.g. 0.10"></div>
+      <div><label class="fl" for="cf-bon" id="cf-bon-l">Bonus / spins value £</label><input id="cf-bon" class="input" inputmode="decimal" value="${v(o.bonus)}" placeholder="e.g. 10"></div>
+      <div class="not-spins"><label class="fl" for="cf-x">Play × bonus</label><input id="cf-x" class="input" inputmode="decimal" placeholder="e.g. 10"></div>
+      <div><label class="fl" for="cf-rtp" id="cf-rtp-l">Game RTP %</label><input id="cf-rtp" class="input" inputmode="decimal" value="${esc(rtp)}"></div>
+      <div class="spins-only"><label class="fl" for="cf-srtp">Spins game RTP %</label><input id="cf-srtp" class="input" inputmode="decimal" value="${esc(prefs.srtp != null ? prefs.srtp : rtp)}"></div>
+      <div class="full"><label class="fl" for="cf-exp">Expected £</label><input id="cf-exp" class="input" inputmode="text" value="${v(o.expected)}"></div>
     </div>
     <p class="small muted" id="cf-ev"></p>
-    <p class="small muted">Amount to play: everything you have to wager, including any "play £10 to get…" step. Depositing alone costs nothing.</p>
+    <p class="small muted">Amount to play: everything you have to stake, e.g. the £10 in "bet £10 get 30 spins", plus any wagering. It copies your deposit for spins and wager & get offers unless you change it.</p>
     ${editing ? `<div class="edit-grid">
       <div><label class="fl" for="cf-wag">Wagered so far £</label><input id="cf-wag" class="input" inputmode="decimal" value="${v(o.wagered)}"></div>
       <div><label class="fl" for="cf-res">Result £</label><input id="cf-res" class="input" inputmode="text" value="${v(o.result)}" placeholder="When finished"></div>
@@ -1667,24 +1674,48 @@ function openCasinoForm(x) {
     ${editing ? '<button type="button" class="text-btn neg" id="cf-del">Delete offer</button>' : ''}
     <button type="button" class="text-btn" id="cf-cancel">Cancel</button>
     <p class="small" id="cf-msg"></p>`);
-  let type = o.type || 'Free spins', status = o.status, expTouched = o.expected != null;
+  let type = o.type || 'Free spins', status = o.status, expTouched = o.expected != null, playTouched = o.wagerReq != null;
   const msg = $('#cf-msg', sheet);
   const fail = (t) => { msg.textContent = t; msg.className = 'small err'; };
+  const pct = (x) => Math.round(x * 1000) / 10 + '%';
+  const showType = () => {
+    const spins = type === 'Free spins';
+    $$('.spins-only', sheet).forEach((e) => { e.hidden = !spins; });
+    $$('.not-spins', sheet).forEach((e) => { e.hidden = spins; });
+    $('#cf-bon-l').textContent = spins ? 'Spins value £' : type === 'Cashback' ? 'Cashback £' : 'Bonus £';
+    $('#cf-rtp-l').textContent = spins ? 'Play game RTP %' : 'Game RTP %';
+  };
   const updateEV = () => {
-    const bon = pnum($('#cf-bon').value), wr = pnum($('#cf-wr').value), rtpv = pnum($('#cf-rtp').value);
-    const ev = casinoEV(bon, wr, rtpv, pnum($('#cf-dep').value), type);
-    const p = casinoEVParts(bon, wr, rtpv, type);
-    $('#cf-ev').textContent = ev == null
-      ? 'Expected = what the offer is worth, minus the average cost of anything you have to play (amount played × house edge).'
-      : `Worked out: ${signed(ev)}. ${p.spins ? `Spins worth ${gbp(n0(bon))} × ${Math.round(p.r * 1000) / 10}% RTP = ${gbp(p.value)}` : `${type === 'Cashback' ? 'Cashback' : 'Bonus'} ${gbp(p.value)}`}${p.cost ? `, minus ${gbp(p.cost)} average cost of playing ${gbp(n0(wr))}` : ''}.`;
+    const bon = pnum($('#cf-bon').value), wr = pnum($('#cf-wr').value), rtpv = pnum($('#cf-rtp').value), srtp = pnum($('#cf-srtp').value);
+    const ev = casinoEV(bon, wr, rtpv, pnum($('#cf-dep').value), type, srtp);
+    const p = casinoEVParts(bon, wr, rtpv, type, srtp);
+    const parts = [];
+    if (p.play) parts.push(`Play ${gbp(p.play)} × ${pct(p.pr)} = ${gbp(p.back)} back (${signed(p.playLoss)})`);
+    if (n0(bon)) parts.push(p.spins ? `Spins ${gbp(n0(bon))} × ${pct(p.sr)} = ${gbp(p.value)}` : `${type === 'Cashback' ? 'Cashback' : 'Bonus'} ${gbp(p.value)}`);
+    $('#cf-ev').innerHTML = ev == null
+      ? 'Expected = what you get back from playing, plus what the spins or bonus are worth, minus what you staked.'
+      : `${parts.map(esc).join('<br>')}<br><b>Expected profit ${esc(signed(ev))}</b>`;
     if (!expTouched && ev != null) $('#cf-exp').value = ev;
   };
-  $$('[data-ctype]', sheet).forEach((b) => b.addEventListener('click', () => { type = b.dataset.ctype; $$('[data-ctype]', sheet).forEach((x2) => x2.setAttribute('aria-pressed', String(x2 === b))); $('#cf-bon-l').textContent = type === 'Free spins' ? 'Spins value £' : type === 'Cashback' ? 'Cashback £' : 'Bonus £'; updateEV(); }));
+  const fillPlay = () => {
+    if (playTouched || !(type === 'Free spins' || type === 'Wager & get')) return;
+    const d = pnum($('#cf-dep').value); $('#cf-wr').value = d == null ? '' : d; updateEV();
+  };
+  const fillSpins = () => {
+    const n = pnum($('#cf-spn').value), val = pnum($('#cf-spv').value);
+    if (n != null && val != null) { $('#cf-bon').value = r2(n * val); updateEV(); }
+  };
+  $$('[data-ctype]', sheet).forEach((b) => b.addEventListener('click', () => { type = b.dataset.ctype; $$('[data-ctype]', sheet).forEach((x2) => x2.setAttribute('aria-pressed', String(x2 === b))); showType(); fillPlay(); updateEV(); }));
   $$('[data-cst]', sheet).forEach((b) => b.addEventListener('click', () => { status = b.dataset.cst; $$('[data-cst]', sheet).forEach((x2) => x2.setAttribute('aria-pressed', String(x2 === b))); }));
-  ['#cf-bon', '#cf-wr', '#cf-rtp', '#cf-dep'].forEach((id) => $(id).addEventListener('input', updateEV));
+  ['#cf-bon', '#cf-wr', '#cf-rtp', '#cf-srtp', '#cf-dep'].forEach((id) => $(id).addEventListener('input', updateEV));
+  $('#cf-dep').addEventListener('input', fillPlay);
+  $('#cf-wr').addEventListener('input', () => { playTouched = $('#cf-wr').value.trim() !== ''; });
+  ['#cf-spn', '#cf-spv'].forEach((id) => $(id).addEventListener('input', fillSpins));
+  $('#cf-srtp').addEventListener('change', () => { const r = pnum($('#cf-srtp').value); if (r != null) { prefs.srtp = r; savePrefs(); } });
   $('#cf-x').addEventListener('input', () => { const m = pnum($('#cf-x').value), b = pnum($('#cf-bon').value); if (m != null && b != null) { $('#cf-wr').value = r2(m * b); updateEV(); } });
   $('#cf-exp').addEventListener('input', () => { expTouched = $('#cf-exp').value.trim() !== ''; });
   $('#cf-rtp').addEventListener('change', () => { const r = pnum($('#cf-rtp').value); if (r != null) { prefs.rtp = r; store.set(PREF_KEY, JSON.stringify(Object.assign(JSON.parse(store.get(PREF_KEY) || '{}'), { rtp: r }))); } });
+  showType();
   updateEV();
   $('#cf-cancel').onclick = closeSettle;
   const del = $('#cf-del');
