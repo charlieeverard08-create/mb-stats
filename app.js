@@ -345,7 +345,7 @@ function avatar(name) {
   const known = LOGO_SITES[key] && LOGO_CACHE[key] !== LOGO_SITES[key] ? undefined : LOGO_CACHE[key];
   if (known === 'none' || !key) return `<span class="av" style="--h:${h}" aria-hidden="true">${esc(ini)}</span>`;
   const cands = known ? [known] : logoCandidates(key);
-  return `<span class="av${known ? ' has-logo' : ''}" style="--h:${h}" aria-hidden="true"><i>${esc(ini)}</i><img alt="" referrerpolicy="no-referrer" decoding="async" data-key="${esc(key)}" data-cands="${esc(cands.slice(1).join('|'))}" src="${logoUrl(cands[0])}"></span>`;
+  return `<span class="av${known ? ' has-logo' : ''}" style="--h:${h}" aria-hidden="true"><i>${esc(ini)}</i><img alt="" referrerpolicy="no-referrer" decoding="async" data-key="${esc(key)}" data-name="${esc(n)}" data-cands="${esc(cands.slice(1).join('|'))}" src="${logoUrl(cands[0])}"></span>`;
 }
 
 function logoBookies() {
@@ -381,7 +381,7 @@ const LOGO_DOMAINS = {
   'pokerstars': 'pokerstars.uk', 'mrq': 'mrq.com', 'jackpotjoy': 'jackpotjoy.com', 'buzzbingo': 'buzzbingo.com',
 };
 // Bump LOGO_VER whenever the list changes so bookies that found nothing get another try.
-const LOGO_VER = 2;
+const LOGO_VER = 3;
 let LOGO_CACHE = {}, LOGO_SITES = {};
 try { LOGO_CACHE = JSON.parse(localStorage.getItem('mb.logos') || '{}') || {}; } catch (e) { LOGO_CACHE = {}; }
 try { LOGO_SITES = JSON.parse(localStorage.getItem('mb.logoSites') || '{}') || {}; } catch (e) { LOGO_SITES = {}; }
@@ -403,7 +403,11 @@ function logoCandidates(key) {
   const out = [];
   if (LOGO_SITES[key]) out.push(LOGO_SITES[key]);
   if (LOGO_DOMAINS[key]) out.push(...LOGO_DOMAINS[key].split('|'));
-  for (const d of [key + '.com', key + '.co.uk', key + '.bet']) if (!out.includes(d)) out.push(d);
+  const base = key.replace(/(casino|sports?|betting|bet)$/, '') || key;
+  const guesses = [key + '.com', key + '.co.uk', key + '.bet'];
+  if (!/bet/.test(key)) guesses.push(key + 'bet.com', key + 'bet.co.uk');
+  if (base !== key) guesses.push(base + '.com', base + '.co.uk', base + 'bet.com');
+  for (const d of guesses) if (!out.includes(d)) out.push(d);
   return out;
 }
 function logoUrl(domain) { return 'https://www.google.com/s2/favicons?sz=128&domain=' + encodeURIComponent(domain); }
@@ -412,9 +416,35 @@ function saveLogo(key, val) {
   try { localStorage.setItem('mb.logos', JSON.stringify(LOGO_CACHE)); } catch (e) {}
 }
 function domainOf(src) { try { return new URL(src).searchParams.get('domain') || ''; } catch (e) { return ''; } }
+// Wikipedia's database (Wikidata) lists the official website for most brands.
+// Only accept entries described as a betting/casino company, so "Coral" doesn't become the sea creature.
+const WIKI_PENDING = {};
+function wikiDomain(name) {
+  const k = logoKey(name);
+  if (!WIKI_PENDING[k]) WIKI_PENDING[k] = (async () => {
+    const api = 'https://www.wikidata.org/w/api.php?origin=*&format=json&';
+    const found = await fetch(api + 'action=wbsearchentities&language=en&type=item&limit=7&search=' + encodeURIComponent(name)).then((r) => r.json());
+    const ok = (found.search || []).filter((e) => /bet|bookmak|gambl|casino|wager|sportsbook|bingo|poker|lotter|exchange/i.test((e.description || '') + ' ' + (e.label || '')));
+    if (!ok.length) return '';
+    const ents = await fetch(api + 'action=wbgetentities&props=claims&ids=' + ok.map((e) => e.id).join('|')).then((r) => r.json());
+    for (const e of ok) {
+      const sites = (((ents.entities || {})[e.id] || {}).claims || {}).P856 || [];
+      for (const c of sites) { const d = cleanDomain(c.mainsnak && c.mainsnak.datavalue && c.mainsnak.datavalue.value); if (d) return d; }
+    }
+    return '';
+  })().catch(() => '');
+  return WIKI_PENDING[k];
+}
 function logoNext(img) {
   const rest = (img.dataset.cands || '').split('|').filter(Boolean);
   if (rest.length) { img.dataset.cands = rest.slice(1).join('|'); img.src = logoUrl(rest[0]); return; }
+  if (!img.dataset.wiki && img.dataset.name) {
+    img.dataset.wiki = '1';
+    wikiDomain(img.dataset.name).then((d) => {
+      if (d && img.isConnected && domainOf(img.src) !== d) img.src = logoUrl(d); else if (img.isConnected) logoNext(img);
+    });
+    return;
+  }
   // Only give up for good when we're online (a failed load offline proves nothing).
   const had = LOGO_CACHE[img.dataset.key];
   if (navigator.onLine !== false && !had) saveLogo(img.dataset.key, 'none');
