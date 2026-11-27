@@ -59,7 +59,9 @@ const S = {
   data: null,
   period: prefs.period || 'all',
   book: '',
-  tab: 'overview',
+  tab: 'home',
+  statsTab: 'overview',
+  offersTab: 'balances',
   bookSort: prefs.bookSort || 'profit',
   bookAll: false,
   q: '',
@@ -301,38 +303,73 @@ function render() {
     return;
   }
   C = compute();
-  renderFilters();
   const up = new Date(S.data.updated);
   $('#updated').textContent = (S.error ? 'Offline · ' : '') + 'Updated ' + up.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  if (!['home', 'bets', 'add', 'offers', 'stats'].includes(S.tab)) S.tab = 'home';
   $$('.tabbar button').forEach((b) => { if (b.dataset.tab === S.tab) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
-  document.body.classList.toggle('on-add', ['add', 'wallet', 'report', 'casino'].includes(S.tab));
+  $('#pageTitle').textContent = { home: greeting(), bets: 'Bets', add: 'Add a bet', offers: 'Offers', stats: 'Stats' }[S.tab];
+  document.body.dataset.tab = S.tab;
   const view = $('#view');
   const form = $('#addForm');
   if (S.tab === 'add' && form && form.contains(document.activeElement)) return; // don't wipe the form while typing
-  if (S.tab === 'wallet' && document.activeElement && document.activeElement.id === 'notesBox') return;
-  if (!VIEWS[S.tab]) S.tab = 'overview';
+  if (S.tab === 'offers' && document.activeElement && document.activeElement.id === 'notesBox') return;
   view.innerHTML = VIEWS[S.tab]();
   bindView();
   drawCharts();
 }
 
-function renderFilters() {
-  $('#periods').innerHTML = PERIODS.map(([k, label]) => `<button class="chip" data-period="${k}" aria-pressed="${k === S.period}">${label}</button>`).join('');
+function greeting() {
+  const h = new Date().getHours();
+  return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+}
+
+function filtersBar() {
   const names = Array.from(new Set(S.data.bets.map((b) => b.book))).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
-  const sel = $('#book');
-  sel.innerHTML = `<option value="">All bookmakers</option>` + names.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
-  sel.value = S.book;
+  return `<div class="filters">
+    <div class="chips" role="group" aria-label="Time period">${PERIODS.map(([k, label]) => `<button class="chip" data-period="${k}" aria-pressed="${k === S.period}">${label}</button>`).join('')}</div>
+    <select id="book" class="select" aria-label="Bookmaker"><option value="">All bookmakers</option>${names.map((n) => `<option value="${esc(n)}"${n === S.book ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select>
+  </div>`;
+}
+
+function seg(name, current, items) {
+  return `<div class="seg" role="tablist">${items.map(([k, l]) => `<button type="button" role="tab" data-${name}="${k}" aria-selected="${current === k}">${l}</button>`).join('')}</div>`;
+}
+
+// Coloured initials for a bookie, like a payee icon in a banking app.
+function avatar(name) {
+  const n = String(name || '?').trim();
+  const words = n.replace(/[^A-Za-z0-9 ]/g, ' ').split(/\s+/).filter(Boolean);
+  const ini = (words.length > 1 ? words[0][0] + words[1][0] : n.replace(/[^A-Za-z0-9]/g, '').slice(0, 2)).toUpperCase() || '?';
+  let h = 0; for (const ch of n.toLowerCase()) h = (h * 31 + ch.charCodeAt(0)) % 360;
+  return `<span class="av" style="--h:${h}" aria-hidden="true">${esc(ini)}</span>`;
+}
+
+function txnRow(b) {
+  const issue = checkBet(b);
+  const right = b.status === 'open'
+    ? `<div class="amt"><span class="pill open">Open</span></div><div class="meta">exp. ${signed(b.expected)}</div>`
+    : `<div class="amt ${tone(b.profit)}">${b.profit == null ? '—' : signed(b.profit)}</div>${b.expected != null ? `<div class="meta">exp. ${signed(b.expected)}</div>` : ''}`;
+  return `<div class="txn tap${issue ? ' flagged' : ''}" data-open="${b.row}">
+    ${avatar(b.book)}
+    <div class="main"><div class="title">${esc(b.match || b.book)}</div><div class="meta">${esc(b.book)} · ${esc(b.type)}${issue ? ' · <span class="warn">⚠ check</span>' : ''}</div></div>
+    <div class="right">${right}</div>
+  </div>`;
+}
+
+function dayLabel(d) {
+  const today = iso(new Date()), yest = iso(addDays(new Date(), -1));
+  if (d === today) return 'Today';
+  if (d === yest) return 'Yesterday';
+  const dt = parseIso(d);
+  return dt.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: dt.getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
 }
 
 const VIEWS = {
-  overview() {
+  statsOverview() {
     const { k, P } = C;
     const cmp = k.hasPrev ? ` That's <b class="${k.diff >= 0 ? 'pos' : 'neg'}">${gbp(Math.abs(k.diff))}</b> ${k.diff >= 0 ? 'more than' : 'less than'} ${P.prevLabel}.` : '';
     const where = S.book ? ` at <b>${esc(S.book)}</b>` : '';
     return `<div class="stack">
-      ${checkBanner()}
-      ${dayCard()}
-      ${targetCard()}
       <p class="lede"><b>${gbp(k.profit)}</b> profit from <b>${int(k.settled)}</b> settled bets ${esc(P.phrase)}${where}.${cmp}</p>
       <div class="kpis">
         <div class="kpi hero"><div class="label">Profit</div><div class="big ${tone(k.profit)}">${gbp(k.profit)}</div><div class="foot">${int(k.settled)} settled bets ${esc(P.phrase)}</div></div>
@@ -342,12 +379,8 @@ const VIEWS = {
         <div class="kpi"><div class="label">Best bet</div><div class="big">${k.best ? gbp(k.best.profit) : '—'}</div><div class="foot">${k.best ? esc(k.best.book + ' · ' + k.best.type) : 'No settled bets'}</div></div>
         <div class="kpi"><div class="label">Open bets</div><div class="big">${int(k.openCount)}</div><div class="foot">${gbp(k.openLiability)} liability</div></div>
       </div>
-      ${calendarCard(S.calMonth, 'cal')}
       <section class="card"><h2>Running total</h2><p class="sub">Settled profit added up day by day</p><div class="chart" id="ch-cum" style="min-height:230px"></div></section>
-      <div class="grid2">
-        <section class="card"><h2>${C.P.daily ? 'Profit by day' : 'Profit by month'}</h2><p class="sub">Settled bets</p><div class="chart" id="ch-bars"></div></section>
-        <section class="card"><h2>Open bets</h2><p class="sub">Waiting to settle, any date</p>${openList()}</section>
-      </div>
+      <section class="card"><h2>${C.P.daily ? 'Profit by day' : 'Profit by month'}</h2><p class="sub">Settled bets</p><div class="chart" id="ch-bars"></div></section>
     </div>`;
   },
 
@@ -394,21 +427,14 @@ const VIEWS = {
     </div>`;
   },
 
-  bets() {
-    const statusChip = (v, l) => `<button class="chip" data-status="${v}" aria-pressed="${S.betStatus === v}">${l}</button>`;
-    return `<div class="stack"><section class="card">
-      <h2>Bets</h2><p class="sub">${esc(C.P.phrase.charAt(0).toUpperCase() + C.P.phrase.slice(1))}, newest first</p>
-      <div class="toolbar">
-        <input type="search" class="search" id="q" placeholder="Search event, bookie or type" value="${esc(S.q)}" aria-label="Search bets">
-        <div class="chips wrap">${statusChip('all', 'All')}${statusChip('open', 'Open')}${statusChip('settled', 'Settled')}${(() => { const n = C.inPeriod.filter((b) => checkBet(b)).length; return n ? statusChip('check', '⚠ Needs checking (' + int(n) + ')') : ''; })()}</div>
-      </div>
-      <div class="list" id="betList">${betList()}</div>
-    </section></div>`;
-  }
 };
 
 // Daily overview: bets placed on one day (follows the bookmaker filter, ignores the time buttons).
 function dayCard() {
+  const savedBook = S.book; S.book = '';
+  try { return dayCardInner(); } finally { S.book = savedBook; }
+}
+function dayCardInner() {
   const today = iso(new Date());
   const day = S.day || today;
   const yesterday = iso(addDays(new Date(), -1));
@@ -459,23 +485,22 @@ function filteredBets() {
   return C.inPeriod.filter((b) => (S.betStatus === 'all' || (S.betStatus === 'check' ? !!checkBet(b) : b.status === S.betStatus)) && (!q || (b.match + ' ' + b.book + ' ' + b.type).toLowerCase().includes(q)));
 }
 
+function filteredBetsAll() {
+  const q = S.q.trim().toLowerCase();
+  return S.data.bets.filter((b) => (S.betStatus === 'all' || (S.betStatus === 'check' ? !!checkBet(b) : b.status === S.betStatus)) && (!q || (b.match + ' ' + b.book + ' ' + b.type).toLowerCase().includes(q)));
+}
+
 function betList() {
-  const rows = filteredBets();
-  if (!rows.length) return `<div class="empty">No bets match.</div>`;
+  const rows = filteredBetsAll();
+  if (!rows.length) return `<div class="card"><div class="empty">No bets match.</div></div>`;
   const shown = rows.slice(0, S.betLimit);
-  return shown.map((b) => {
-    const stake = b.stake ? `Stake <b>${gbp(b.stake)}</b>` : b.fb ? `Free bet <b>${gbp(b.fb)}</b>` : '';
-    const profit = b.status === 'open'
-      ? `<span class="profit">Expected <b class="${tone(b.expected)}">${gbp(b.expected)}</b></span>`
-      : `<span class="profit"><b class="${tone(b.profit)}">${b.profit == null ? '—' : signed(b.profit)}</b></span>`;
-    const issue = checkBet(b);
-    return `<div class="bet tap${issue ? ' flagged' : ''}" data-open="${b.row}">
-      <div class="line1"><span>${esc(b.book)} · ${esc(b.type)}${b.status === 'open' ? '<span class="tag open">Open</span>' : ''}</span><span>${fmtDay(b.date)}</span></div>
-      <div class="event">${esc(b.match || '—')}</div>
-      <div class="figs">${stake ? `<span>${stake}</span>` : ''}${b.liability != null ? `<span>Liability <b>${gbp(b.liability)}</b></span>` : ''}${profit}</div>
-      ${issue ? `<div class="check-hint">⚠ ${esc(issue)}</div>` : ''}
-      ${b.status === 'open' ? '<div class="settle-hint">Tap to settle or edit</div>' : ''}
-    </div>`;
+  const groups = [];
+  shown.forEach((b) => { const g = groups[groups.length - 1]; if (g && g.date === b.date) g.bets.push(b); else groups.push({ date: b.date, bets: [b] }); });
+  return groups.map((g) => {
+    const dayAll = S.data.bets.filter((b) => b.date === g.date && b.status === 'settled');
+    const tot = r2(sum(dayAll, (b) => b.profit));
+    return `<div class="day-group"><div class="group-head"><span>${esc(dayLabel(g.date))}</span><span class="${tone(tot)}">${dayAll.length ? signed(tot) : ''}</span></div>
+      <section class="card list-card">${g.bets.map(txnRow).join('')}</section></div>`;
   }).join('') +
     (rows.length > S.betLimit ? `<button class="more" id="more">Show more</button>` : '') +
     `<div class="count">Showing ${int(shown.length)} of ${int(rows.length)} bets</div>`;
@@ -483,7 +508,7 @@ function betList() {
 
 function bindView() {
   $$('[data-book]').forEach((el) => el.addEventListener('click', () => {
-    S.book = el.dataset.book; S.tab = 'overview'; window.scrollTo(0, 0); render(); toast('Showing ' + S.book + ' only');
+    S.book = el.dataset.book; S.tab = 'stats'; S.statsTab = 'overview'; window.scrollTo(0, 0); render(); toast('Showing ' + S.book + ' only');
   }));
   $$('[data-sort]').forEach((el) => el.addEventListener('click', () => { S.bookSort = el.dataset.sort; savePrefs(); render(); }));
   const all = $('#bookAll'); if (all) all.onclick = () => { S.bookAll = !S.bookAll; render(); };
@@ -503,10 +528,22 @@ function bindView() {
     render();
   }));
   const dt = $('#dayToday'); if (dt) dt.onclick = () => { S.day = null; render(); };
+  $$('[data-stats]').forEach((b) => b.addEventListener('click', () => { S.statsTab = b.dataset.stats; render(); }));
+  $$('[data-offers]').forEach((b) => b.addEventListener('click', () => { S.offersTab = b.dataset.offers; render(); }));
+  $$('[data-go]').forEach((b) => b.addEventListener('click', () => {
+    const [tab, sub] = b.dataset.go.split(':');
+    S.tab = tab;
+    if (tab === 'stats' && sub) S.statsTab = sub;
+    if (tab === 'offers' && sub) S.offersTab = sub;
+    if (tab === 'bets' && sub) { S.betStatus = sub; S.betLimit = 40; }
+    window.scrollTo(0, 0); render();
+  }));
+  const tt = $('#tileToday'); if (tt) tt.onclick = () => { if (S.day) { S.day = null; render(); } const d = $('#day'); if (d) d.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+  const bk = $('#book'); if (bk) bk.addEventListener('change', () => { S.book = bk.value; render(); });
+  $$('[data-period]').forEach((b) => b.addEventListener('click', () => { S.period = b.dataset.period; savePrefs(); render(); }));
   if (S.tab === 'add') bindAdd();
-  if (S.tab === 'wallet') bindWallet();
-  if (S.tab === 'report') bindReport();
-  if (S.tab === 'casino') bindCasino();
+  if (S.tab === 'offers') { bindWallet(); bindCasino(); }
+  if (S.tab === 'stats' && S.statsTab === 'report') bindReport();
   bindOverviewExtras();
 }
 function bindOpen(root) {
@@ -518,6 +555,102 @@ function bindOpen(root) {
 }
 function bindMore() { const m = $('#more'); if (m) m.onclick = () => { S.betLimit += 40; refreshBetList(); }; }
 function refreshBetList() { const el = $('#betList'); if (el) { el.innerHTML = betList(); bindMore(); bindOpen(el); } }
+
+/* ---------- Home ---------- */
+VIEWS.home = function () {
+  const now = new Date();
+  const key = monthKey(now);
+  const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const prevKey = monthKey(prev);
+  const dom = now.getDate();
+  const settled = S.data.bets.filter((b) => b.status === 'settled');
+  const month = r2(sum(settled.filter((b) => b.date.slice(0, 7) === key), (b) => b.profit));
+  const lastSame = r2(sum(settled.filter((b) => b.date.slice(0, 7) === prevKey && Number(b.date.slice(8, 10)) <= dom), (b) => b.profit));
+  const diff = r2(month - lastSame);
+  const allTime = r2(sum(settled, (b) => b.profit));
+  const today = iso(now);
+  const todayBets = S.data.bets.filter((b) => b.date === today);
+  const todayProfit = r2(sum(todayBets.filter((b) => b.status === 'settled'), (b) => b.profit));
+  const open = S.data.bets.filter((b) => b.status === 'open');
+  const liability = r2(sum(open, (b) => b.liability));
+  const w = S.data.wallet;
+  const soon = w ? w.freeBets.filter((f) => f.expiry && f.expiry <= iso(addDays(now, 3))).sort((a, b) => (a.expiry < b.expiry ? -1 : 1)) : [];
+  const cas = S.data.casino ? S.data.casino.filter((c) => c.status !== 'Done') : [];
+  const monthName = now.toLocaleDateString('en-GB', { month: 'long' });
+  return `<div class="stack">
+    <section class="hero">
+      <div class="hero-label">${esc(monthName)} profit</div>
+      <div class="hero-num">${gbp(month)}</div>
+      <div class="hero-sub"><span class="delta ${tone(diff)}">${diff >= 0 ? '▲' : '▼'} ${gbp(Math.abs(diff))}</span> vs this point last month</div>
+      <div class="hero-foot">All time ${gbp(allTime)}</div>
+    </section>
+    <div class="tiles">
+      <button type="button" class="tile" id="tileToday"><span class="tile-label">Today</span><span class="tile-num ${tone(todayProfit)}">${signed(todayProfit)}</span><span class="tile-foot">${int(todayBets.length)} ${todayBets.length === 1 ? 'bet' : 'bets'} placed</span></button>
+      <button type="button" class="tile" data-go="bets:open"><span class="tile-label">Open bets</span><span class="tile-num">${int(open.length)}</span><span class="tile-foot">${gbp(liability)} liability</span></button>
+    </div>
+    ${checkBanner()}
+    ${targetCard()}
+    ${dayCard()}
+    ${open.length ? `<section class="card">
+      <div class="card-head"><div><h2>Open bets</h2><p class="sub">Tap to settle</p></div><button type="button" class="chip" data-go="bets:open">See all</button></div>
+      <div class="list">${open.slice(0, 5).map(txnRow).join('')}</div>
+    </section>` : ''}
+    ${soon.length ? `<section class="card">
+      <div class="card-head"><div><h2>Free bets expiring soon</h2><p class="sub">Next 3 days</p></div><button type="button" class="chip" data-go="offers:freebets">Wallet</button></div>
+      <div class="list">${soon.map((f) => { const e = expiryText(f.expiry); return `<div class="row tap" data-go="offers:freebets">${avatar(f.bookie)}<div class="main"><div class="title">${esc(f.bookie)} ${gbp(f.amount)}</div><div class="meta"><span class="${e.cls}">${esc(e.text)}</span>${f.note ? ' · ' + esc(f.note) : ''}</div></div></div>`; }).join('')}</div>
+    </section>` : ''}
+    ${cas.length ? `<button type="button" class="tile wide" data-go="offers:casino"><span class="tile-label">Casino offers in progress</span><span class="tile-num">${int(cas.length)}</span><span class="tile-foot">${signed(r2(sum(cas, (c) => c.expected)))} expected</span></button>` : ''}
+  </div>`;
+};
+
+/* ---------- Bets ---------- */
+VIEWS.bets = function () {
+  const statusChip = (v, l) => `<button class="chip" data-status="${v}" aria-pressed="${S.betStatus === v}">${l}</button>`;
+  const nCheck = S.data.bets.filter((b) => checkBet(b)).length;
+  return `<div class="stack">
+    <div class="toolbar sticky-tools">
+      <input type="search" class="search" id="q" placeholder="Search event, bookie or type" value="${esc(S.q)}" aria-label="Search bets">
+      <div class="chips">${statusChip('all', 'All')}${statusChip('open', 'Open')}${statusChip('settled', 'Settled')}${nCheck ? statusChip('check', '⚠ Check (' + int(nCheck) + ')') : ''}</div>
+    </div>
+    <div id="betList">${betList()}</div>
+  </div>`;
+};
+
+/* ---------- Offers ---------- */
+VIEWS.offers = function () {
+  const t = walletTotals();
+  const cas = S.data.casino;
+  const casMonth = cas ? r2(sum(cas.filter((c) => c.status === 'Done' && c.date.slice(0, 7) === monthKey(new Date())), (c) => c.result)) : 0;
+  const body = S.offersTab === 'casino' ? VIEWS.casino()
+    : !S.data.wallet ? VIEWS.wallet()
+    : `<div class="stack">${VIEWS.wallet(S.offersTab)}</div>`;
+  return `<div class="stack">
+    <section class="hero">
+      <div class="hero-label">In your accounts</div>
+      <div class="hero-num">${t ? gbp(t.balance) : '—'}</div>
+      <div class="hero-sub">${t ? `${gbp(t.freeValue)} in ${int(t.freeBets)} free ${t.freeBets === 1 ? 'bet' : 'bets'}${t.expiringSoon ? ` · <span class="warn">${t.expiringSoon} expiring soon</span>` : ''}` : 'Update your sheet script to use the wallet'}</div>
+      ${cas ? `<div class="hero-foot">Casino this month ${signed(casMonth)}</div>` : ''}
+    </section>
+    ${seg('offers', S.offersTab, [['balances', 'Balances'], ['freebets', 'Free bets'], ['casino', 'Casino'], ['notes', 'Notes']])}
+    ${body}
+  </div>`;
+};
+
+/* ---------- Stats ---------- */
+VIEWS.stats = function () {
+  const tab = S.statsTab;
+  const withFilters = ['overview', 'bookies', 'types'].includes(tab);
+  const body = tab === 'calendar' ? `<div class="stack">${calendarCard(S.calMonth, 'cal')}</div>`
+    : tab === 'bookies' ? VIEWS.bookies()
+    : tab === 'types' ? VIEWS.types()
+    : tab === 'report' ? VIEWS.report()
+    : VIEWS.statsOverview();
+  return `<div class="stack">
+    ${seg('stats', tab, [['overview', 'Overview'], ['calendar', 'Calendar'], ['bookies', 'Bookies'], ['types', 'Types'], ['report', 'Report']])}
+    ${withFilters ? filtersBar() : ''}
+    ${body}
+  </div>`;
+};
 
 /* ---------- add a bet ---------- */
 const SNR_TYPES = ['Free Bet']; // stake not returned
@@ -562,7 +695,7 @@ VIEWS.add = function () {
   const f = S.form;
   if (!f.type) f.type = typeChoices()[0] || 'Qualifying';
   return `<div class="stack"><section class="card">
-    <h2>Add a bet</h2><p class="sub">Goes straight into your sheet as an open bet</p>
+    <p class="sub add-sub">Goes straight into your sheet as an open bet</p>
     ${f.freeBetId ? `<div class="fb-banner">Using your ${esc(f.book)} free bet. It comes off your Wallet when you add this. <button type="button" class="text-btn" id="fbCancel">Don't use it</button></div>` : ''}
     <form id="addForm" class="form" autocomplete="off" novalidate>
       <div class="fl">Bet type</div>
@@ -1083,7 +1216,7 @@ function bindOverviewExtras() {
   $$('[data-calday]').forEach((b) => b.addEventListener('click', () => {
     if (b.classList.contains('future')) return;
     S.day = b.dataset.calday === iso(new Date()) ? null : b.dataset.calday;
-    S.tab = 'overview'; render();
+    S.tab = 'home'; window.scrollTo(0, 0); render();
     const d = $('#day'); if (d) d.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }));
 }
@@ -1122,7 +1255,6 @@ VIEWS.report = function () {
   const isThis = key === monthKey(now);
   const top = r.books.slice(0, 5), worst = r.books.length > 5 ? r.books.slice(-3).reverse().filter((b) => b.profit < 0) : [];
   return `<div class="stack report" id="report">
-    <div class="wallet-head no-print"><button type="button" class="text-btn" id="repBack">‹ Back</button><h2>Monthly report</h2><span></span></div>
     <h1 class="print-only">Matched betting · ${esc(name)}</h1>
     ${calendarCard(key, 'rep-cal')}
     <div class="kpis">
@@ -1272,18 +1404,9 @@ function walletTotals() {
 }
 
 function openMenu() {
-  const t = walletTotals();
   const sheet = openSheet(`
     <h2>Menu</h2>
     <div class="menu-list">
-      <button type="button" class="menu-item" data-menu="wallet">
-        <span class="mi-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h15a3 3 0 0 1 3 3v7a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V7zm0 0 2-3h11v3M16 13.5h2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-        <span class="mi-text"><b>Wallet & notes</b><span>${t ? `${gbp(t.balance)} in balances · ${int(t.freeBets)} free ${t.freeBets === 1 ? 'bet' : 'bets'}${t.expiringSoon ? ` · ${t.expiringSoon} expiring soon` : ''}` : 'Balances, free bets and notes'}</span></span>
-      </button>
-      <button type="button" class="menu-item" data-menu="casino">
-        <span class="mi-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="8" cy="8" r="1.6" fill="currentColor"/><circle cx="16" cy="8" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="8" cy="16" r="1.6" fill="currentColor"/><circle cx="16" cy="16" r="1.6" fill="currentColor"/></svg></span>
-        <span class="mi-text"><b>Casino offers</b><span>${casinoMenuLine()}</span></span>
-      </button>
       <button type="button" class="menu-item" data-menu="report">
         <span class="mi-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l5 5v13H7zM14 3v5h5M10 17v-3M13 17v-5M16 17v-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
         <span class="mi-text"><b>Monthly report</b><span>A month's summary to save or share</span></span>
@@ -1301,9 +1424,7 @@ function openMenu() {
   $$('[data-menu]', sheet).forEach((b) => b.addEventListener('click', () => {
     const k = b.dataset.menu;
     closeSettle();
-    if (k === 'wallet') { S.tab = 'wallet'; window.scrollTo(0, 0); render(); }
-    if (k === 'report') { S.tab = 'report'; S.repMonth = null; window.scrollTo(0, 0); render(); }
-    if (k === 'casino') { S.tab = 'casino'; window.scrollTo(0, 0); render(); }
+    if (k === 'report') { S.tab = 'stats'; S.statsTab = 'report'; S.repMonth = null; window.scrollTo(0, 0); render(); }
     if (k === 'refresh') load(true);
     if (k === 'settings') setTimeout(openSettings, 220);
   }));
@@ -1335,7 +1456,7 @@ function agoText(s) {
   const d = Math.round(h / 24); return d === 1 ? 'yesterday' : d + ' days ago';
 }
 
-VIEWS.wallet = function () {
+VIEWS.wallet = function (part) {
   const w = S.data.wallet;
   if (!w) {
     return `<div class="stack"><section class="card"><h2>Wallet & notes</h2>
@@ -1347,6 +1468,7 @@ VIEWS.wallet = function () {
   const fbs = w.freeBets.slice().sort((a, b) => (a.expiry || '9999') < (b.expiry || '9999') ? -1 : 1);
   const balList = bal.length ? bal.map((b) => `
     <div class="row tap" data-bal="${esc(b.bookie)}">
+      ${avatar(b.bookie)}
       <div class="main"><div class="title">${esc(b.bookie)}</div><div class="meta">Updated ${esc(agoText(b.updated) || '—')}</div></div>
       <div class="right"><div class="amt">${gbp(b.balance)}</div></div>
     </div>`).join('') : `<div class="empty">No balances yet. Add your bookies and exchanges.</div>`;
@@ -1361,39 +1483,36 @@ VIEWS.wallet = function () {
       </div>
     </div>`;
   }).join('') : `<div class="empty">No free bets. Add them as you get them.</div>`;
-  return `<div class="stack">
-    <div class="wallet-head"><button type="button" class="text-btn" id="walletBack">‹ Back</button><h2>Wallet & notes</h2><span></span></div>
-    <div class="kpis two">
-      <div class="kpi"><div class="label">In balances</div><div class="big">${gbp(t.balance)}</div><div class="foot">${int(w.balances.length)} accounts</div></div>
-      <div class="kpi"><div class="label">Free bets</div><div class="big">${gbp(t.freeValue)}</div><div class="foot">${int(t.freeBets)} waiting${t.expiringSoon ? ` · ${t.expiringSoon} expiring soon` : ''}</div></div>
-    </div>
+  if (part === 'balances') return `
     <section class="card" id="balances">
       <div class="card-head"><div><h2>Balances</h2><p class="sub">Tap one to update it</p></div><button type="button" class="chip" id="balAdd">+ Add</button></div>
       <div class="list">${balList}</div>
-    </section>
+    </section>`;
+  if (part === 'freebets') return `
     <section class="card" id="freebets">
       <div class="card-head"><div><h2>Free bets</h2><p class="sub">Soonest to expire first</p></div><button type="button" class="chip" id="fbAdd">+ Add</button></div>
       <div class="list">${fbList}</div>
-    </section>
+    </section>`;
+  return `
     <section class="card" id="notes">
       <h2>Notes</h2><p class="sub">Saved to the Notes tab in your sheet</p>
       <textarea id="notesBox" class="input notes" maxlength="${NOTES_LIMIT}" placeholder="Offers to come back to, promo codes, reminders…">${esc(w.notes)}</textarea>
       <div class="notes-foot"><span id="notesCount" class="small muted"></span><span id="notesStatus" class="small muted">Saved</span></div>
-    </section>
-  </div>`;
+    </section>`;
 };
 
 function bindWallet() {
   const back = $('#walletBack'); if (back) back.onclick = () => { S.tab = 'overview'; render(); };
   if (!S.data.wallet) return;
   $$('[data-bal]').forEach((el) => el.addEventListener('click', () => openBalance(el.dataset.bal)));
-  $('#balAdd').onclick = () => openBalance('');
-  $('#fbAdd').onclick = openFreeBetForm;
+  const ba = $('#balAdd'); if (ba) ba.onclick = () => openBalance('');
+  const fa = $('#fbAdd'); if (fa) fa.onclick = openFreeBetForm;
   $$('[data-fbuse]').forEach((el) => el.addEventListener('click', () => {
     const f = S.data.wallet.freeBets.find((x) => x.id === el.dataset.fbuse); if (!f) return;
     S.form = Object.assign(blankForm(), { type: 'Free Bet', book: f.bookie, amount: String(f.amount), freeBetId: f.id });
     S.tab = 'add'; window.scrollTo(0, 0); render();
   }));
+  if (!$('#notesBox')) return;
   $$('[data-fbdel]').forEach((el) => el.addEventListener('click', async () => {
     const f = S.data.wallet.freeBets.find((x) => x.id === el.dataset.fbdel); if (!f) return;
     el.disabled = true;
@@ -1435,7 +1554,7 @@ async function walletPost(payload) {
     if (notesDirty) S.data.wallet.notes = keepNotes;
     store.set(CACHE_KEY, JSON.stringify(Object.assign(JSON.parse(store.get(CACHE_KEY) || '{}'), { wallet: j.wallet })));
   }
-  if (S.tab === 'wallet') render();
+  if (S.tab === 'offers') render();
   return j;
 }
 
@@ -1565,7 +1684,6 @@ VIEWS.casino = function () {
     ${list.map((x) => `<div class="row tap" data-cas="${esc(x.id)}"><div class="main"><div class="title">${esc(x.site)}</div><div class="meta">${esc(x.type || 'Offer')} · ${fmtShort(x.date)}${x.expected != null ? ' · exp. ' + signed(x.expected) : ''}</div></div>
       <div class="right"><div class="amt ${tone(x.result)}">${signed(x.result)}</div></div></div>`).join('')}`).join('') : `<div class="empty">Finished offers will show here.</div>`;
   return `<div class="stack">
-    <div class="wallet-head"><button type="button" class="text-btn" id="casBack">‹ Back</button><h2>Casino offers</h2><span></span></div>
     <div class="kpis">
       <div class="kpi hero"><div class="label">Casino profit</div><div class="big ${tone(all)}">${gbp(all)}</div><div class="foot">${int(done.length)} finished ${done.length === 1 ? 'offer' : 'offers'}</div></div>
       <div class="kpi"><div class="label">This month</div><div class="big ${tone(month)}">${signed(month)}</div><div class="foot">finished offers</div></div>
@@ -1582,7 +1700,7 @@ VIEWS.casino = function () {
 function bindCasino() {
   const back = $('#casBack'); if (back) back.onclick = () => { S.tab = 'overview'; render(); };
   if (!S.data.casino) return;
-  $('#casAdd').onclick = () => openCasinoForm(null);
+  const ca = $('#casAdd'); if (ca) ca.onclick = () => openCasinoForm(null);
   $$('[data-cas]').forEach((el) => el.addEventListener('click', () => {
     const x = S.data.casino.find((o) => o.id === el.dataset.cas);
     if (x) (x.status === 'Done' ? openCasinoForm(x) : openCasinoActions(x));
@@ -1596,7 +1714,7 @@ async function casinoPost(payload) {
     S.data.casino = normalise({ bets: [], casino: j.casino }).casino;
     store.set(CACHE_KEY, JSON.stringify(Object.assign(JSON.parse(store.get(CACHE_KEY) || '{}'), { casino: j.casino })));
   }
-  if (S.tab === 'casino') render();
+  if (S.tab === 'offers') render();
   return j;
 }
 
@@ -2018,11 +2136,6 @@ function toast(text) {
 }
 
 function init() {
-  $('#periods').addEventListener('click', (e) => {
-    const b = e.target.closest('[data-period]'); if (!b) return;
-    S.period = b.dataset.period; savePrefs(); render();
-  });
-  $('#book').addEventListener('change', (e) => { S.book = e.target.value; render(); });
   $$('.tabbar button').forEach((b) => b.addEventListener('click', () => {
     if (S.tab === b.dataset.tab) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
     S.tab = b.dataset.tab; window.scrollTo(0, 0); render();
