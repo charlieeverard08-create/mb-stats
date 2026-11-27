@@ -504,3 +504,21 @@ body.is-loading #menu { opacity: 0.7; }
   .cal-cell.empty { border: 0 !important; background: none !important; }
 }
 .sheet-card > * { flex-shrink: 0; }
+
+/* Casino */
+.cas { padding: 12px 0; border-top: 1px solid var(--line); cursor: pointer; }
+.cas:first-child { border-top: 0; }
+.cas-top { display: flex; gap: 10px; align-items: flex-start; }
+.cas-top .main { flex: 1; min-width: 0; }
+.cas .title { font-weight: 600; }
+.cas .meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.cas .right { text-align: right; flex: none; }
+.cas .amt { font-weight: 650; font-variant-numeric: tabular-nums; }
+.cas .day-progress { margin-top: 8px; }
+.cas-w { margin-top: 4px; }
+.cas-note { font-style: italic; }
+.cas-month { display: flex; justify-content: space-between; padding: 12px 0 4px; font-size: 12.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; border-top: 1px solid var(--line); }
+.cas-month:first-child { border-top: 0; padding-top: 0; }
+.inline-row { display: flex; gap: 8px; align-items: center; }
+.inline-row .input { flex: 1; }
+.inline-row .chip { flex: none; padding: 10px 16px; }

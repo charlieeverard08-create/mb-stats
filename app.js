@@ -79,7 +79,7 @@ function blankForm() {
   return { type: '', book: '', match: '', backOdds: '', amount: '', layOdds: '', over: {}, freeBetId: '', mode: 'standard', customLay: '', refund: '', keep: '', ewTerms: '0.25', placeLay: '' };
 }
 S.form = blankForm();
-const savePrefs = () => store.set(PREF_KEY, JSON.stringify({ period: S.period, bookSort: S.bookSort, commission: S.commission, theme: S.theme }));
+const savePrefs = () => store.set(PREF_KEY, JSON.stringify({ period: S.period, bookSort: S.bookSort, commission: S.commission, theme: S.theme, rtp: prefs.rtp }));
 
 const PERIODS = [
   ['month', 'Month'],
@@ -131,7 +131,14 @@ function normalise(raw) {
     notes: String(w.notes || ''),
     target: Number(w.target) || 0
   } : null;
-  return { bets, gubbed, wallet, updated: raw.updated || new Date().toISOString() };
+  const casino = Array.isArray(raw.casino) ? raw.casino.map((c) => ({
+    id: String(c.id), date: toIsoDate(c.date) || iso(new Date()), site: String(c.site || ''), type: String(c.type || ''),
+    deposit: c.deposit == null ? null : Number(c.deposit), bonus: c.bonus == null ? null : Number(c.bonus),
+    wagerReq: c.wagerReq == null ? null : Number(c.wagerReq), wagered: c.wagered == null ? null : Number(c.wagered),
+    expected: c.expected == null ? null : Number(c.expected), result: c.result == null ? null : Number(c.result),
+    status: c.status === 'Done' ? 'Done' : 'In progress', notes: String(c.notes || '')
+  })) : null;
+  return { bets, gubbed, wallet, casino, updated: raw.updated || new Date().toISOString() };
 }
 
 function periodInfo(bets) {
@@ -298,7 +305,7 @@ function render() {
   const up = new Date(S.data.updated);
   $('#updated').textContent = (S.error ? 'Offline · ' : '') + 'Updated ' + up.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
   $$('.tabbar button').forEach((b) => { if (b.dataset.tab === S.tab) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
-  document.body.classList.toggle('on-add', S.tab === 'add' || S.tab === 'wallet' || S.tab === 'report');
+  document.body.classList.toggle('on-add', ['add', 'wallet', 'report', 'casino'].includes(S.tab));
   const view = $('#view');
   const form = $('#addForm');
   if (S.tab === 'add' && form && form.contains(document.activeElement)) return; // don't wipe the form while typing
@@ -499,6 +506,7 @@ function bindView() {
   if (S.tab === 'add') bindAdd();
   if (S.tab === 'wallet') bindWallet();
   if (S.tab === 'report') bindReport();
+  if (S.tab === 'casino') bindCasino();
   bindOverviewExtras();
 }
 function bindOpen(root) {
@@ -782,7 +790,7 @@ async function submitBet() {
 
 /* ---------- talking to the sheet, with an offline queue ---------- */
 const QUEUE_KEY = 'mb.queue';
-const QUEUEABLE = ['add', 'settle', 'edit', 'setBalance', 'addFreeBet', 'removeFreeBet', 'setTarget'];
+const QUEUEABLE = ['add', 'settle', 'edit', 'setBalance', 'addFreeBet', 'removeFreeBet', 'setTarget', 'casinoAdd', 'casinoUpdate', 'casinoDelete'];
 const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const getQueue = () => { try { return JSON.parse(store.get(QUEUE_KEY) || '[]'); } catch (e) { return []; } };
 const setQueue = (q) => { store.set(QUEUE_KEY, JSON.stringify(q)); showQueueState(); };
@@ -833,6 +841,9 @@ function queueLabel(p) {
   if (p.action === 'addFreeBet') return 'Free bet ' + p.bookie + ' ' + gbp(p.amount);
   if (p.action === 'removeFreeBet') return 'Remove a free bet';
   if (p.action === 'setTarget') return 'Monthly target ' + gbp(p.target);
+  if (p.action === 'casinoAdd') return 'Casino: add ' + p.offer.site;
+  if (p.action === 'casinoUpdate') return 'Casino: update ' + p.offer.site;
+  if (p.action === 'casinoDelete') return 'Casino: delete an offer';
   return p.action;
 }
 
@@ -1097,7 +1108,9 @@ function reportData(key) {
     best: dayList[0], worst: dayList.length > 1 ? dayList[dayList.length - 1] : null, daysBet: days.size,
     perDay: days.size ? r2(profit / days.size) : 0,
     books: group((b) => b.book), types: group((b) => b.type),
-    target: S.data.wallet && S.data.wallet.target ? S.data.wallet.target : 0
+    target: S.data.wallet && S.data.wallet.target ? S.data.wallet.target : 0,
+    casino: S.data.casino ? r2(sum(S.data.casino.filter((c) => c.status === 'Done' && c.date.slice(0, 7) === key), (c) => c.result)) : null,
+    casinoCount: S.data.casino ? S.data.casino.filter((c) => c.status === 'Done' && c.date.slice(0, 7) === key).length : 0
   };
 }
 
@@ -1118,6 +1131,7 @@ VIEWS.report = function () {
       <div class="kpi"><div class="label">vs expected</div><div class="big ${tone(r.vsExp)}">${signed(r.vsExp)}</div><div class="foot">${gbp(r.exp)} expected</div></div>
       <div class="kpi"><div class="label">Per betting day</div><div class="big">${gbp(r.perDay)}</div><div class="foot">${int(r.daysBet)} days with bets</div></div>
       <div class="kpi"><div class="label">Free bet conversion</div><div class="big">${r.fbConv == null ? '—' : r.fbConv.toFixed(1) + '%'}</div><div class="foot">from ${gbp(r.fbValue)} of free bets</div></div>
+      ${r.casinoCount ? `<div class="kpi"><div class="label">Casino</div><div class="big ${tone(r.casino)}">${signed(r.casino)}</div><div class="foot">${int(r.casinoCount)} ${r.casinoCount === 1 ? "offer" : "offers"} · total ${gbp(r2(r.profit + r.casino))}</div></div>` : ''}
       ${r.target ? `<div class="kpi"><div class="label">Target</div><div class="big ${r.profit >= r.target ? 'pos' : ''}">${Math.round((r.profit / r.target) * 100)}%</div><div class="foot">${r.profit >= r.target ? 'Hit' : 'Of'} ${gbp(r.target)}</div></div>` : ''}
     </div>
     <div class="grid2">
@@ -1146,6 +1160,7 @@ function reportText(r) {
     `Profit: ${gbp(r.profit)} from ${r.settled} settled bets (${signed(r.diff)} vs last month)`,
     `Expected: ${gbp(r.exp)} (${signed(r.vsExp)})`,
     r.fbConv != null ? `Free bet conversion: ${r.fbConv.toFixed(1)}%` : '',
+    r.casinoCount ? `Casino: ${signed(r.casino)} from ${r.casinoCount} offers (total ${gbp(r2(r.profit + r.casino))})` : '',
     r.target ? `Target: ${gbp(r.target)} (${Math.round((r.profit / r.target) * 100)}%)` : '',
     r.best ? `Best day: ${fmtDay(r.best[0])} ${signed(r2(r.best[1]))}` : '',
     r.books.length ? `Top bookie: ${r.books[0].name} ${signed(r.books[0].profit)}` : ''
@@ -1265,6 +1280,10 @@ function openMenu() {
         <span class="mi-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h15a3 3 0 0 1 3 3v7a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V7zm0 0 2-3h11v3M16 13.5h2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
         <span class="mi-text"><b>Wallet & notes</b><span>${t ? `${gbp(t.balance)} in balances · ${int(t.freeBets)} free ${t.freeBets === 1 ? 'bet' : 'bets'}${t.expiringSoon ? ` · ${t.expiringSoon} expiring soon` : ''}` : 'Balances, free bets and notes'}</span></span>
       </button>
+      <button type="button" class="menu-item" data-menu="casino">
+        <span class="mi-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="8" cy="8" r="1.6" fill="currentColor"/><circle cx="16" cy="8" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="8" cy="16" r="1.6" fill="currentColor"/><circle cx="16" cy="16" r="1.6" fill="currentColor"/></svg></span>
+        <span class="mi-text"><b>Casino offers</b><span>${casinoMenuLine()}</span></span>
+      </button>
       <button type="button" class="menu-item" data-menu="report">
         <span class="mi-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l5 5v13H7zM14 3v5h5M10 17v-3M13 17v-5M16 17v-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
         <span class="mi-text"><b>Monthly report</b><span>A month's summary to save or share</span></span>
@@ -1284,6 +1303,7 @@ function openMenu() {
     closeSettle();
     if (k === 'wallet') { S.tab = 'wallet'; window.scrollTo(0, 0); render(); }
     if (k === 'report') { S.tab = 'report'; S.repMonth = null; window.scrollTo(0, 0); render(); }
+    if (k === 'casino') { S.tab = 'casino'; window.scrollTo(0, 0); render(); }
     if (k === 'refresh') load(true);
     if (k === 'settings') setTimeout(openSettings, 220);
   }));
@@ -1484,6 +1504,198 @@ function openFreeBetForm() {
     const btn = $('#fb-save'); btn.disabled = true; btn.textContent = 'Adding…';
     try { await walletPost({ action: 'addFreeBet', bookie, amount, expiry: expEl.value, note: $('#fb-note').value.trim() }); closeSettle(); toast('Free bet added'); }
     catch (e) { fail(e.message); btn.disabled = false; btn.textContent = 'Add free bet'; }
+  };
+}
+
+/* ---------- casino offers ---------- */
+const CASINO_TYPES = ['Free spins', 'Deposit bonus', 'Wager & get', 'Cashback', 'Other'];
+
+function casinoMenuLine() {
+  const c = S.data && S.data.casino;
+  if (!c) return 'Free spins, bonuses and wagering';
+  const open = c.filter((x) => x.status !== 'Done').length;
+  const month = r2(sum(c.filter((x) => x.status === 'Done' && x.date.slice(0, 7) === monthKey(new Date())), (x) => x.result));
+  return `${open} in progress · ${signed(month)} this month`;
+}
+
+// Expected value of a wagering offer: what you get, minus what wagering it through is expected to cost.
+function casinoEV(bonus, wagerReq, rtp, deposit, type) {
+  const b = n0(bonus), w = n0(wagerReq), edge = 1 - (rtp == null ? 96 : rtp) / 100;
+  if (!b && !w) return null;
+  if (type === 'Cashback') return r2(b);
+  return r2(b - w * edge);
+}
+
+VIEWS.casino = function () {
+  const c = S.data.casino;
+  if (!c) {
+    return `<div class="stack"><section class="card"><h2>Casino offers</h2>
+      <p class="sub">Your sheet's script needs updating first. Replace your DashboardData script with the new one, then Deploy > Manage deployments > edit > New version > Deploy.</p>
+      <button type="button" class="more" id="casBack">Back</button></section></div>`;
+  }
+  const done = c.filter((x) => x.status === 'Done');
+  const open = c.filter((x) => x.status !== 'Done');
+  const all = r2(sum(done, (x) => x.result));
+  const mk = monthKey(new Date());
+  const month = r2(sum(done.filter((x) => x.date.slice(0, 7) === mk), (x) => x.result));
+  const openExp = r2(sum(open, (x) => x.expected));
+  const byMonth = new Map();
+  done.slice().sort((a, b) => (a.date < b.date ? 1 : -1)).forEach((x) => { const k = x.date.slice(0, 7); if (!byMonth.has(k)) byMonth.set(k, []); byMonth.get(k).push(x); });
+  const openList = open.length ? open.map((x) => {
+    const pct = x.wagerReq ? Math.min(100, (n0(x.wagered) / x.wagerReq) * 100) : null;
+    return `<div class="cas tap" data-cas="${esc(x.id)}">
+      <div class="cas-top"><div class="main"><div class="title">${esc(x.site)}</div><div class="meta">${esc(x.type || 'Offer')} · ${fmtShort(x.date)}${x.deposit ? ' · deposit ' + gbp(x.deposit) : ''}${x.bonus ? ' · bonus ' + gbp(x.bonus) : ''}</div></div>
+      <div class="right"><div class="amt ${tone(x.expected)}">${x.expected == null ? '—' : signed(x.expected)}</div><div class="meta">expected</div></div></div>
+      ${pct != null ? `<div class="day-progress"><i style="width:${pct}%"></i></div><div class="meta cas-w">${gbp(n0(x.wagered))} of ${gbp(x.wagerReq)} wagered · ${gbp(r2(Math.max(0, x.wagerReq - n0(x.wagered))))} to go</div>` : ''}
+      ${x.notes ? `<div class="meta cas-note">${esc(x.notes)}</div>` : ''}
+    </div>`;
+  }).join('') : `<div class="empty">Nothing in progress. Tap + Add when you start an offer.</div>`;
+  const doneList = byMonth.size ? Array.from(byMonth.entries()).map(([k, list]) => `
+    <div class="cas-month"><span>${esc(fmtMonthLong(k))}</span><b class="${tone(r2(sum(list, (x) => x.result)))}">${signed(r2(sum(list, (x) => x.result)))}</b></div>
+    ${list.map((x) => `<div class="row tap" data-cas="${esc(x.id)}"><div class="main"><div class="title">${esc(x.site)}</div><div class="meta">${esc(x.type || 'Offer')} · ${fmtShort(x.date)}${x.expected != null ? ' · exp. ' + signed(x.expected) : ''}</div></div>
+      <div class="right"><div class="amt ${tone(x.result)}">${signed(x.result)}</div></div></div>`).join('')}`).join('') : `<div class="empty">Finished offers will show here.</div>`;
+  return `<div class="stack">
+    <div class="wallet-head"><button type="button" class="text-btn" id="casBack">‹ Back</button><h2>Casino offers</h2><span></span></div>
+    <div class="kpis">
+      <div class="kpi hero"><div class="label">Casino profit</div><div class="big ${tone(all)}">${gbp(all)}</div><div class="foot">${int(done.length)} finished ${done.length === 1 ? 'offer' : 'offers'}</div></div>
+      <div class="kpi"><div class="label">This month</div><div class="big ${tone(month)}">${signed(month)}</div><div class="foot">finished offers</div></div>
+      <div class="kpi"><div class="label">In progress</div><div class="big">${int(open.length)}</div><div class="foot">${signed(openExp)} expected</div></div>
+    </div>
+    <section class="card">
+      <div class="card-head"><div><h2>In progress</h2><p class="sub">Tap one to update wagering or finish it</p></div><button type="button" class="chip" id="casAdd">+ Add</button></div>
+      <div class="list">${openList}</div>
+    </section>
+    <section class="card"><h2>Finished</h2><p class="sub">Grouped by month started</p><div class="list">${doneList}</div></section>
+  </div>`;
+};
+
+function bindCasino() {
+  const back = $('#casBack'); if (back) back.onclick = () => { S.tab = 'overview'; render(); };
+  if (!S.data.casino) return;
+  $('#casAdd').onclick = () => openCasinoForm(null);
+  $$('[data-cas]').forEach((el) => el.addEventListener('click', () => {
+    const x = S.data.casino.find((o) => o.id === el.dataset.cas);
+    if (x) (x.status === 'Done' ? openCasinoForm(x) : openCasinoActions(x));
+  }));
+}
+
+async function casinoPost(payload) {
+  const j = await postSheet(payload, true);
+  if (j.queued) { toast('No signal: saved on your phone, sends automatically'); return j; }
+  if (j.casino) {
+    S.data.casino = normalise({ bets: [], casino: j.casino }).casino;
+    store.set(CACHE_KEY, JSON.stringify(Object.assign(JSON.parse(store.get(CACHE_KEY) || '{}'), { casino: j.casino })));
+  }
+  if (S.tab === 'casino') render();
+  return j;
+}
+
+function offerPayload(x, changes) {
+  return Object.assign({ site: x.site, type: x.type, deposit: x.deposit, bonus: x.bonus, wagerReq: x.wagerReq, wagered: x.wagered, expected: x.expected, result: x.result, status: x.status, notes: x.notes }, changes);
+}
+
+function openCasinoActions(x) {
+  const sheet = openSheet(`
+    <h2>${esc(x.site)}</h2><p class="sub">${esc(x.type || 'Offer')} · started ${fmtDay(x.date)}${x.expected != null ? ' · expected ' + signed(x.expected) : ''}</p>
+    ${x.wagerReq ? `<label class="fl" for="c-wag">Wagered so far £ <span class="muted">(of ${gbp(x.wagerReq)})</span></label>
+    <div class="inline-row"><input id="c-wag" class="input" inputmode="decimal" value="${x.wagered == null ? '' : esc(x.wagered)}" placeholder="0"><button type="button" class="chip" id="c-wag-save">Save</button></div>` : ''}
+    <label class="fl" for="c-res">Finished? Your profit or loss £</label>
+    <div class="inline-row"><input id="c-res" class="input" inputmode="text" placeholder="e.g. 18.40 or -3.20"><button type="button" class="chip fb-use" id="c-done">Finish</button></div>
+    <p class="small muted">Profit = what you withdrew (or have left) minus what you deposited.</p>
+    <button type="button" class="wide-btn" id="c-edit">Edit details</button>
+    <button type="button" class="text-btn neg" id="c-del">Delete offer</button>
+    <button type="button" class="text-btn" id="c-close">Close</button>
+    <p class="small" id="c-msg"></p>`);
+  const msg = $('#c-msg', sheet);
+  const fail = (t) => { msg.textContent = t; msg.className = 'small err'; };
+  const go = async (changes, done) => {
+    try { await casinoPost({ action: 'casinoUpdate', id: x.id, offer: offerPayload(x, changes) }); closeSettle(); toast(done); }
+    catch (e) { fail(e.message); }
+  };
+  const ws = $('#c-wag-save');
+  if (ws) ws.onclick = () => { const v = pnum($('#c-wag').value); if (v == null || v < 0) return fail('Wagered must be a number.'); go({ wagered: v }, 'Wagering updated'); };
+  $('#c-done').onclick = () => {
+    const v = pnum($('#c-res').value.replace('−', '-'));
+    if (v == null) return fail('Enter your profit or loss.');
+    go({ status: 'Done', result: v, wagered: x.wagerReq || x.wagered }, 'Finished ' + signed(v)).then(() => { if (v > 0) confetti(); });
+  };
+  $('#c-edit').onclick = () => { closeSettle(); setTimeout(() => openCasinoForm(x), 220); };
+  $('#c-del').onclick = async () => {
+    if ($('#c-del').dataset.sure !== '1') { $('#c-del').dataset.sure = '1'; $('#c-del').textContent = 'Tap again to delete'; return; }
+    try { await casinoPost({ action: 'casinoDelete', id: x.id }); closeSettle(); toast('Offer deleted'); } catch (e) { fail(e.message); }
+  };
+  $('#c-close').onclick = closeSettle;
+}
+
+function openCasinoForm(x) {
+  const editing = !!x;
+  const o = x || { site: '', type: 'Free spins', deposit: null, bonus: null, wagerReq: null, wagered: null, expected: null, result: null, status: 'In progress', notes: '' };
+  const rtp = prefs.rtp != null ? prefs.rtp : 96;
+  const sites = Array.from(new Set([...(S.data.casino || []).map((c) => c.site), ...S.data.bets.map((b) => b.book)])).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+  const v = (n) => (n == null ? '' : esc(n));
+  const sheet = openSheet(`
+    <h2>${editing ? 'Edit casino offer' : 'Add a casino offer'}</h2><p class="sub">Saved to the Casino tab in your sheet</p>
+    <label class="fl" for="cf-site">Site</label>
+    <input id="cf-site" class="input" list="dl-sites" value="${esc(o.site)}" autocapitalize="words" placeholder="e.g. Grosvenor"><datalist id="dl-sites">${sites.map((s) => `<option value="${esc(s)}">`).join('')}</datalist>
+    <div class="fl">Offer type</div>
+    <div class="chips wrap" id="cf-types">${CASINO_TYPES.map((t) => `<button type="button" class="chip sm" data-ctype="${esc(t)}" aria-pressed="${o.type === t}">${esc(t)}</button>`).join('')}</div>
+    <div class="edit-grid">
+      <div><label class="fl" for="cf-dep">Deposit £</label><input id="cf-dep" class="input" inputmode="decimal" value="${v(o.deposit)}" placeholder="0"></div>
+      <div><label class="fl" for="cf-bon" id="cf-bon-l">Bonus / spins value £</label><input id="cf-bon" class="input" inputmode="decimal" value="${v(o.bonus)}" placeholder="e.g. 10"></div>
+      <div><label class="fl" for="cf-wr">Wagering required £</label><input id="cf-wr" class="input" inputmode="decimal" value="${v(o.wagerReq)}" placeholder="0 if none"></div>
+      <div><label class="fl" for="cf-x">or × bonus</label><input id="cf-x" class="input" inputmode="decimal" placeholder="e.g. 10"></div>
+      <div><label class="fl" for="cf-rtp">Game RTP %</label><input id="cf-rtp" class="input" inputmode="decimal" value="${esc(rtp)}"></div>
+      <div><label class="fl" for="cf-exp">Expected £</label><input id="cf-exp" class="input" inputmode="text" value="${v(o.expected)}"></div>
+    </div>
+    <p class="small muted" id="cf-ev"></p>
+    ${editing ? `<div class="edit-grid">
+      <div><label class="fl" for="cf-wag">Wagered so far £</label><input id="cf-wag" class="input" inputmode="decimal" value="${v(o.wagered)}"></div>
+      <div><label class="fl" for="cf-res">Result £</label><input id="cf-res" class="input" inputmode="text" value="${v(o.result)}" placeholder="When finished"></div>
+    </div>
+    <div class="fl">Status</div>
+    <div class="chips" id="cf-status"><button type="button" class="chip" data-cst="In progress" aria-pressed="${o.status !== 'Done'}">In progress</button><button type="button" class="chip" data-cst="Done" aria-pressed="${o.status === 'Done'}">Finished</button></div>` : ''}
+    <label class="fl" for="cf-notes">Notes</label>
+    <input id="cf-notes" class="input" maxlength="300" value="${esc(o.notes)}" placeholder="e.g. Big Bass only, 7 days to wager">
+    <button type="button" class="primary" id="cf-save">${editing ? 'Save changes' : 'Add offer'}</button>
+    ${editing ? '<button type="button" class="text-btn neg" id="cf-del">Delete offer</button>' : ''}
+    <button type="button" class="text-btn" id="cf-cancel">Cancel</button>
+    <p class="small" id="cf-msg"></p>`);
+  let type = o.type || 'Free spins', status = o.status, expTouched = o.expected != null;
+  const msg = $('#cf-msg', sheet);
+  const fail = (t) => { msg.textContent = t; msg.className = 'small err'; };
+  const updateEV = () => {
+    const ev = casinoEV(pnum($('#cf-bon').value), pnum($('#cf-wr').value), pnum($('#cf-rtp').value), pnum($('#cf-dep').value), type);
+    $('#cf-ev').textContent = ev == null ? 'Expected = bonus minus the expected cost of wagering it (wagering × house edge).' : `Worked out: ${signed(ev)} (bonus ${gbp(n0(pnum($('#cf-bon').value)))} minus ${gbp(r2(n0(pnum($('#cf-wr').value)) * (1 - n0(pnum($('#cf-rtp').value) ?? 96) / 100)))} expected wagering cost).`;
+    if (!expTouched && ev != null) $('#cf-exp').value = ev;
+  };
+  $$('[data-ctype]', sheet).forEach((b) => b.addEventListener('click', () => { type = b.dataset.ctype; $$('[data-ctype]', sheet).forEach((x2) => x2.setAttribute('aria-pressed', String(x2 === b))); $('#cf-bon-l').textContent = type === 'Free spins' ? 'Spins value £' : type === 'Cashback' ? 'Cashback £' : 'Bonus £'; updateEV(); }));
+  $$('[data-cst]', sheet).forEach((b) => b.addEventListener('click', () => { status = b.dataset.cst; $$('[data-cst]', sheet).forEach((x2) => x2.setAttribute('aria-pressed', String(x2 === b))); }));
+  ['#cf-bon', '#cf-wr', '#cf-rtp', '#cf-dep'].forEach((id) => $(id).addEventListener('input', updateEV));
+  $('#cf-x').addEventListener('input', () => { const m = pnum($('#cf-x').value), b = pnum($('#cf-bon').value); if (m != null && b != null) { $('#cf-wr').value = r2(m * b); updateEV(); } });
+  $('#cf-exp').addEventListener('input', () => { expTouched = $('#cf-exp').value.trim() !== ''; });
+  $('#cf-rtp').addEventListener('change', () => { const r = pnum($('#cf-rtp').value); if (r != null) { prefs.rtp = r; store.set(PREF_KEY, JSON.stringify(Object.assign(JSON.parse(store.get(PREF_KEY) || '{}'), { rtp: r }))); } });
+  updateEV();
+  $('#cf-cancel').onclick = closeSettle;
+  const del = $('#cf-del');
+  if (del) del.onclick = async () => {
+    if (del.dataset.sure !== '1') { del.dataset.sure = '1'; del.textContent = 'Tap again to delete'; return; }
+    try { await casinoPost({ action: 'casinoDelete', id: x.id }); closeSettle(); toast('Offer deleted'); } catch (e) { fail(e.message); }
+  };
+  $('#cf-save').onclick = async () => {
+    const site = $('#cf-site').value.trim();
+    if (!site) return fail('Add the site.');
+    const num = (id) => { const el = $(id); if (!el) return undefined; const t = el.value.trim().replace('−', '-'); return t === '' ? null : pnum(t); };
+    for (const [id, label] of [['#cf-dep', 'Deposit'], ['#cf-bon', 'Bonus'], ['#cf-wr', 'Wagering'], ['#cf-exp', 'Expected'], ['#cf-wag', 'Wagered'], ['#cf-res', 'Result']]) {
+      const el = $(id); if (el && el.value.trim() !== '' && pnum(el.value.replace('−', '-')) == null) return fail(label + ' must be a number.');
+    }
+    if (status === 'Done' && num('#cf-res') == null) return fail('Add the result, or set it back to In progress.');
+    const offer = { site, type, deposit: num('#cf-dep'), bonus: num('#cf-bon'), wagerReq: num('#cf-wr'), expected: num('#cf-exp'), notes: $('#cf-notes').value.trim(),
+      wagered: editing ? num('#cf-wag') : null, result: editing ? num('#cf-res') : null, status: editing ? status : 'In progress' };
+    const btn = $('#cf-save'); btn.disabled = true; btn.textContent = 'Saving…';
+    try {
+      await casinoPost(editing ? { action: 'casinoUpdate', id: x.id, offer } : { action: 'casinoAdd', offer });
+      closeSettle(); toast(editing ? 'Offer updated' : 'Casino offer added');
+    } catch (e) { fail(e.message); btn.disabled = false; btn.textContent = editing ? 'Save changes' : 'Add offer'; }
   };
 }
 
