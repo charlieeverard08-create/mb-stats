@@ -67,7 +67,7 @@ const S = {
   betLimit: 40,
   loading: false,
   error: '',
-  form: { type: '', book: '', match: '', backOdds: '', amount: '', layOdds: '', over: {} },
+  form: { type: '', book: '', match: '', backOdds: '', amount: '', layOdds: '', over: {}, freeBetId: '' },
   commission: prefs.commission != null ? prefs.commission : 0,
   day: null, // null = today; otherwise 'YYYY-MM-DD'
   theme: ['auto', 'dark', 'light', 'temple', 'party'].includes(prefs.theme) ? prefs.theme : 'auto',
@@ -116,7 +116,13 @@ function normalise(raw) {
   bets.forEach((b) => { b.rawBook = b.book; b.book = canonical.get(keyOf(b.book)); });
   bets.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : a.time < b.time ? 1 : a.time > b.time ? -1 : a.row - b.row));
   const gubbed = (raw.gubbed || []).map((s) => String(s).trim()).filter(Boolean);
-  return { bets, gubbed, updated: raw.updated || new Date().toISOString() };
+  const w = raw.wallet || null;
+  const wallet = w ? {
+    balances: (w.balances || []).map((b) => ({ bookie: String(b.bookie || ''), balance: Number(b.balance) || 0, updated: String(b.updated || '') })),
+    freeBets: (w.freeBets || []).map((f) => ({ id: String(f.id), bookie: String(f.bookie || ''), amount: Number(f.amount) || 0, expiry: toIsoDate(f.expiry), note: String(f.note || '') })),
+    notes: String(w.notes || '')
+  } : null;
+  return { bets, gubbed, wallet, updated: raw.updated || new Date().toISOString() };
 }
 
 function periodInfo(bets) {
@@ -228,10 +234,13 @@ async function load(manual) {
   if (!link) { showSetup(false); return; }
   if (S.loading) return;
   S.loading = true;
-  $('#refresh').classList.add('spin');
+  document.body.classList.add('is-loading');
+  if (S.data) $('#updated').textContent = 'Refreshing…';
   try {
     const raw = await fetchData(link);
+    const unsavedNotes = notesDirty && S.data && S.data.wallet ? ($('#notesBox') || {}).value : null;
     S.data = normalise(raw);
+    if (unsavedNotes != null && S.data.wallet) S.data.wallet.notes = unsavedNotes;
     S.error = '';
     store.set(CACHE_KEY, JSON.stringify(raw));
     if (manual) toast('Up to date');
@@ -240,7 +249,8 @@ async function load(manual) {
     if (manual || !S.data) toast(S.error.length > 50 ? 'Could not load your sheet' : S.error);
   } finally {
     S.loading = false;
-    $('#refresh').classList.remove('spin');
+    document.body.classList.remove('is-loading');
+    $('#ptr').classList.remove('show', 'spin');
     render();
   }
 }
@@ -278,10 +288,11 @@ function render() {
   const up = new Date(S.data.updated);
   $('#updated').textContent = (S.error ? 'Offline · ' : '') + 'Updated ' + up.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
   $$('.tabbar button').forEach((b) => { if (b.dataset.tab === S.tab) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
-  document.body.classList.toggle('on-add', S.tab === 'add');
+  document.body.classList.toggle('on-add', S.tab === 'add' || S.tab === 'wallet');
   const view = $('#view');
   const form = $('#addForm');
   if (S.tab === 'add' && form && form.contains(document.activeElement)) return; // don't wipe the form while typing
+  if (S.tab === 'wallet' && document.activeElement && document.activeElement.id === 'notesBox') return;
   if (!VIEWS[S.tab]) S.tab = 'overview';
   view.innerHTML = VIEWS[S.tab]();
   bindView();
@@ -471,6 +482,7 @@ function bindView() {
   }));
   const dt = $('#dayToday'); if (dt) dt.onclick = () => { S.day = null; render(); };
   if (S.tab === 'add') bindAdd();
+  if (S.tab === 'wallet') bindWallet();
 }
 function bindOpen(root) {
   $$('[data-open]', root).forEach((el) => el.addEventListener('click', () => {
@@ -524,6 +536,7 @@ VIEWS.add = function () {
   const snr = SNR_TYPES.includes(f.type);
   return `<div class="stack"><section class="card">
     <h2>Add a bet</h2><p class="sub">Goes straight into your sheet as an open bet</p>
+    ${f.freeBetId ? `<div class="fb-banner">Using your ${esc(f.book)} free bet. It comes off your Wallet when you add this. <button type="button" class="text-btn" id="fbCancel">Don't use it</button></div>` : ''}
     <form id="addForm" class="form" autocomplete="off" novalidate>
       <div class="fl">Bet type</div>
       <div class="chips wrap" id="typeChips">${typeChoices().map((t) => `<button type="button" class="chip" data-type="${esc(t)}" aria-pressed="${f.type === t}">${esc(t)}</button>`).join('')}</div>
@@ -606,6 +619,7 @@ function bindAdd() {
   const comm = $('#f-comm');
   if (comm) comm.addEventListener('input', () => { const v = pnum(comm.value); S.commission = v == null ? 0 : v; savePrefs(); renderCalc(); });
   $('#addForm').addEventListener('submit', (e) => { e.preventDefault(); submitBet(); });
+  const fbc = $('#fbCancel'); if (fbc) fbc.onclick = () => { f.freeBetId = ''; render(); };
   renderCalc();
 }
 
@@ -628,8 +642,8 @@ async function submitBet() {
   };
   btn.disabled = true; btn.textContent = 'Adding…'; msg.textContent = 'Sending to your sheet…'; msg.className = 'small muted';
   try {
-    await postSheet({ action: 'add', bet });
-    S.form = { type: f.type, book: '', match: f.match, backOdds: '', amount: '', layOdds: '', over: {} };
+    await postSheet({ action: 'add', bet, useFreeBet: f.freeBetId || undefined });
+    S.form = { type: f.type, book: '', match: f.match, backOdds: '', amount: '', layOdds: '', over: {}, freeBetId: '' };
     toast('Bet added');
     confetti();
     msg.textContent = 'Added to your sheet.'; msg.className = 'small pos';
@@ -720,6 +734,281 @@ function closeSettle() {
   const sheet = $('#sheet');
   sheet.classList.remove('show');
   setTimeout(() => { sheet.hidden = true; sheet.innerHTML = ''; }, 200);
+}
+
+/* ---------- menu ---------- */
+function openSheet(html) {
+  const sheet = $('#sheet');
+  sheet.innerHTML = `<div class="sheet-card" role="dialog" aria-modal="true"><div class="grab"></div>${html}</div>`;
+  sheet.hidden = false;
+  requestAnimationFrame(() => sheet.classList.add('show'));
+  sheet.onclick = (e) => { if (e.target === sheet) closeSettle(); };
+  return sheet;
+}
+
+function walletTotals() {
+  const w = S.data && S.data.wallet;
+  if (!w) return null;
+  const today = iso(new Date());
+  return {
+    balance: r2(w.balances.reduce((a, b) => a + b.balance, 0)),
+    freeBets: w.freeBets.length,
+    freeValue: r2(w.freeBets.reduce((a, f) => a + f.amount, 0)),
+    expiringSoon: w.freeBets.filter((f) => f.expiry && f.expiry <= iso(addDays(new Date(), 1)) && f.expiry >= today).length
+  };
+}
+
+function openMenu() {
+  const t = walletTotals();
+  const sheet = openSheet(`
+    <h2>Menu</h2>
+    <div class="menu-list">
+      <button type="button" class="menu-item" data-menu="wallet">
+        <span class="mi-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h15a3 3 0 0 1 3 3v7a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V7zm0 0 2-3h11v3M16 13.5h2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        <span class="mi-text"><b>Wallet & notes</b><span>${t ? `${gbp(t.balance)} in balances · ${int(t.freeBets)} free ${t.freeBets === 1 ? 'bet' : 'bets'}${t.expiringSoon ? ` · ${t.expiringSoon} expiring soon` : ''}` : 'Balances, free bets and notes'}</span></span>
+      </button>
+      <button type="button" class="menu-item" data-menu="refresh">
+        <span class="mi-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        <span class="mi-text"><b>Refresh</b><span>Or pull down on any page</span></span>
+      </button>
+      <button type="button" class="menu-item" data-menu="settings">
+        <span class="mi-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
+        <span class="mi-text"><b>Settings</b><span>Theme, commission, sheet link</span></span>
+      </button>
+    </div>
+    <button type="button" class="text-btn" id="menu-close">Close</button>`);
+  $$('[data-menu]', sheet).forEach((b) => b.addEventListener('click', () => {
+    const k = b.dataset.menu;
+    closeSettle();
+    if (k === 'wallet') { S.tab = 'wallet'; window.scrollTo(0, 0); render(); }
+    if (k === 'refresh') load(true);
+    if (k === 'settings') setTimeout(openSettings, 220);
+  }));
+  $('#menu-close').onclick = closeSettle;
+}
+
+/* ---------- wallet & notes ---------- */
+const NOTES_LIMIT = 50000; // Google Sheets' limit for one cell
+let notesTimer = null, notesSaving = false, notesDirty = false;
+
+function expiryText(d) {
+  if (!d) return { text: 'No expiry', cls: '' };
+  const today = iso(new Date());
+  const days = Math.round((parseIso(d) - parseIso(today)) / 864e5);
+  if (days < 0) return { text: 'Expired ' + fmtShort(d), cls: 'neg' };
+  if (days === 0) return { text: 'Expires today', cls: 'warn' };
+  if (days === 1) return { text: 'Expires tomorrow', cls: 'warn' };
+  return { text: (days <= 7 ? 'Expires in ' + days + ' days · ' : 'Expires ') + fmtShort(d), cls: days <= 3 ? 'warn' : '' };
+}
+
+function agoText(s) {
+  if (!s) return '';
+  const t = new Date(s.length === 16 ? s + ':00' : s);
+  if (isNaN(t)) return '';
+  const mins = Math.round((Date.now() - t) / 60000);
+  if (mins < 2) return 'just now';
+  if (mins < 60) return mins + ' min ago';
+  const h = Math.round(mins / 60); if (h < 24) return h + 'h ago';
+  const d = Math.round(h / 24); return d === 1 ? 'yesterday' : d + ' days ago';
+}
+
+VIEWS.wallet = function () {
+  const w = S.data.wallet;
+  if (!w) {
+    return `<div class="stack"><section class="card"><h2>Wallet & notes</h2>
+      <p class="sub">Your sheet's script needs updating before the wallet can be used. Replace your DashboardData script with the new one, then Deploy > Manage deployments > edit > New version > Deploy.</p>
+      <button type="button" class="more" id="walletBack">Back</button></section></div>`;
+  }
+  const t = walletTotals();
+  const bal = w.balances.slice().sort((a, b) => b.balance - a.balance);
+  const fbs = w.freeBets.slice().sort((a, b) => (a.expiry || '9999') < (b.expiry || '9999') ? -1 : 1);
+  const balList = bal.length ? bal.map((b) => `
+    <div class="row tap" data-bal="${esc(b.bookie)}">
+      <div class="main"><div class="title">${esc(b.bookie)}</div><div class="meta">Updated ${esc(agoText(b.updated) || '—')}</div></div>
+      <div class="right"><div class="amt">${gbp(b.balance)}</div></div>
+    </div>`).join('') : `<div class="empty">No balances yet. Add your bookies and exchanges.</div>`;
+  const fbList = fbs.length ? fbs.map((f) => {
+    const e = expiryText(f.expiry);
+    return `<div class="fb">
+      <div class="main"><div class="title">${esc(f.bookie)} <span class="fb-amt">${gbp(f.amount)}</span></div>
+        <div class="meta"><span class="${e.cls}">${esc(e.text)}</span>${f.note ? ' · ' + esc(f.note) : ''}</div></div>
+      <div class="fb-actions">
+        <button type="button" class="chip fb-use" data-fbuse="${esc(f.id)}">Use</button>
+        <button type="button" class="icon-btn fb-del" data-fbdel="${esc(f.id)}" aria-label="Remove free bet">✕</button>
+      </div>
+    </div>`;
+  }).join('') : `<div class="empty">No free bets. Add them as you get them.</div>`;
+  return `<div class="stack">
+    <div class="wallet-head"><button type="button" class="text-btn" id="walletBack">‹ Back</button><h2>Wallet & notes</h2><span></span></div>
+    <div class="kpis two">
+      <div class="kpi"><div class="label">In balances</div><div class="big">${gbp(t.balance)}</div><div class="foot">${int(w.balances.length)} accounts</div></div>
+      <div class="kpi"><div class="label">Free bets</div><div class="big">${gbp(t.freeValue)}</div><div class="foot">${int(t.freeBets)} waiting${t.expiringSoon ? ` · ${t.expiringSoon} expiring soon` : ''}</div></div>
+    </div>
+    <section class="card" id="balances">
+      <div class="card-head"><div><h2>Balances</h2><p class="sub">Tap one to update it</p></div><button type="button" class="chip" id="balAdd">+ Add</button></div>
+      <div class="list">${balList}</div>
+    </section>
+    <section class="card" id="freebets">
+      <div class="card-head"><div><h2>Free bets</h2><p class="sub">Soonest to expire first</p></div><button type="button" class="chip" id="fbAdd">+ Add</button></div>
+      <div class="list">${fbList}</div>
+    </section>
+    <section class="card" id="notes">
+      <h2>Notes</h2><p class="sub">Saved to the Notes tab in your sheet</p>
+      <textarea id="notesBox" class="input notes" maxlength="${NOTES_LIMIT}" placeholder="Offers to come back to, promo codes, reminders…">${esc(w.notes)}</textarea>
+      <div class="notes-foot"><span id="notesCount" class="small muted"></span><span id="notesStatus" class="small muted">Saved</span></div>
+    </section>
+  </div>`;
+};
+
+function bindWallet() {
+  const back = $('#walletBack'); if (back) back.onclick = () => { S.tab = 'overview'; render(); };
+  if (!S.data.wallet) return;
+  $$('[data-bal]').forEach((el) => el.addEventListener('click', () => openBalance(el.dataset.bal)));
+  $('#balAdd').onclick = () => openBalance('');
+  $('#fbAdd').onclick = openFreeBetForm;
+  $$('[data-fbuse]').forEach((el) => el.addEventListener('click', () => {
+    const f = S.data.wallet.freeBets.find((x) => x.id === el.dataset.fbuse); if (!f) return;
+    S.form = { type: 'Free Bet', book: f.bookie, match: '', backOdds: '', amount: String(f.amount), layOdds: '', over: {}, freeBetId: f.id };
+    S.tab = 'add'; window.scrollTo(0, 0); render();
+  }));
+  $$('[data-fbdel]').forEach((el) => el.addEventListener('click', async () => {
+    const f = S.data.wallet.freeBets.find((x) => x.id === el.dataset.fbdel); if (!f) return;
+    el.disabled = true;
+    try { await walletPost({ action: 'removeFreeBet', id: f.id }); toast('Removed ' + f.bookie + ' free bet'); }
+    catch (e) { toast('Not removed: ' + e.message.slice(0, 40)); el.disabled = false; }
+  }));
+  const box = $('#notesBox'), count = $('#notesCount'), status = $('#notesStatus');
+  const showCount = () => { count.textContent = int(box.value.length) + ' / ' + int(NOTES_LIMIT); count.classList.toggle('neg', box.value.length >= NOTES_LIMIT); };
+  showCount();
+  box.addEventListener('input', () => {
+    showCount(); notesDirty = true; status.textContent = 'Not saved yet';
+    clearTimeout(notesTimer); notesTimer = setTimeout(saveNotes, 1500);
+  });
+  box.addEventListener('blur', () => { if (notesDirty) { clearTimeout(notesTimer); saveNotes(); } });
+}
+
+async function saveNotes() {
+  const box = $('#notesBox'), status = $('#notesStatus');
+  if (!box || notesSaving) return;
+  const text = box.value.slice(0, NOTES_LIMIT);
+  notesSaving = true; notesDirty = false; status.textContent = 'Saving…';
+  try {
+    const j = await postSheet({ action: 'saveNotes', text });
+    if (j.wallet) S.data.wallet.notes = j.wallet.notes;
+    const st = $('#notesStatus'); if (st) st.textContent = notesDirty ? 'Not saved yet' : 'Saved';
+  } catch (e) {
+    notesDirty = true;
+    const st = $('#notesStatus'); if (st) { st.textContent = 'Not saved: ' + e.message.slice(0, 60); st.classList.add('neg'); }
+  } finally { notesSaving = false; if (notesDirty) { clearTimeout(notesTimer); notesTimer = setTimeout(saveNotes, 3000); } }
+}
+
+// Sends a wallet change and redraws with the wallet the sheet sends back.
+async function walletPost(payload) {
+  const j = await postSheet(payload);
+  if (j.wallet) {
+    const keepNotes = S.data.wallet ? S.data.wallet.notes : '';
+    S.data.wallet = normalise({ bets: [], wallet: j.wallet }).wallet;
+    if (notesDirty) S.data.wallet.notes = keepNotes;
+    store.set(CACHE_KEY, JSON.stringify(Object.assign(JSON.parse(store.get(CACHE_KEY) || '{}'), { wallet: j.wallet })));
+  }
+  if (S.tab === 'wallet') render();
+  return j;
+}
+
+function bookieOptions() {
+  const names = new Set(S.data.bets.map((b) => b.book));
+  if (S.data.wallet) S.data.wallet.balances.forEach((b) => names.add(b.bookie));
+  return `<datalist id="dl-wallet">${Array.from(names).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())).map((n) => `<option value="${esc(n)}">`).join('')}</datalist>`;
+}
+
+function openBalance(name) {
+  const cur = name ? S.data.wallet.balances.find((b) => b.bookie === name) : null;
+  const sheet = openSheet(`
+    <h2>${cur ? esc(cur.bookie) : 'Add a balance'}</h2>
+    <p class="sub">${cur ? 'Last updated ' + esc(agoText(cur.updated) || '—') : 'A bookie or exchange account'}</p>
+    ${cur ? '' : `<label class="fl" for="bal-name">Bookie or exchange</label><input id="bal-name" class="input" list="dl-wallet" autocapitalize="words" placeholder="e.g. Smarkets">${bookieOptions()}`}
+    <label class="fl" for="bal-amt">Balance £</label>
+    <input id="bal-amt" class="input" inputmode="decimal" value="${cur ? esc(cur.balance) : ''}" placeholder="0.00">
+    <button type="button" class="primary" id="bal-save">Save</button>
+    ${cur ? '<button type="button" class="text-btn neg" id="bal-del">Remove this account</button>' : ''}
+    <button type="button" class="text-btn" id="bal-cancel">Cancel</button>
+    <p class="small" id="bal-msg" role="status"></p>`);
+  const amt = $('#bal-amt', sheet); setTimeout(() => (cur ? amt : $('#bal-name', sheet)).focus(), 250);
+  const msg = $('#bal-msg', sheet);
+  const fail = (t) => { msg.textContent = t; msg.className = 'small err'; };
+  $('#bal-cancel').onclick = closeSettle;
+  $('#bal-save').onclick = async () => {
+    const bookie = cur ? cur.bookie : $('#bal-name').value.trim();
+    const v = pnum(amt.value);
+    if (!bookie) return fail('Add the bookie or exchange name.');
+    if (v == null) return fail('Balance must be a number.');
+    const btn = $('#bal-save'); btn.disabled = true; btn.textContent = 'Saving…';
+    try { await walletPost({ action: 'setBalance', bookie, balance: v }); closeSettle(); toast(bookie + ' ' + gbp(v)); }
+    catch (e) { fail(e.message); btn.disabled = false; btn.textContent = 'Save'; }
+  };
+  const del = $('#bal-del');
+  if (del) del.onclick = async () => {
+    del.disabled = true;
+    try { await walletPost({ action: 'setBalance', bookie: cur.bookie, remove: true }); closeSettle(); toast('Removed ' + cur.bookie); }
+    catch (e) { fail(e.message); del.disabled = false; }
+  };
+}
+
+function openFreeBetForm() {
+  const sheet = openSheet(`
+    <h2>Add a free bet</h2><p class="sub">It stays in your wallet until you use or remove it</p>
+    <label class="fl" for="fb-book">Bookie</label>
+    <input id="fb-book" class="input" list="dl-wallet" autocapitalize="words" placeholder="e.g. Betfred">${bookieOptions()}
+    <div class="grid2f">
+      <div><label class="fl" for="fb-amt">Amount £</label><input id="fb-amt" class="input" inputmode="decimal" placeholder="10"></div>
+      <div><label class="fl" for="fb-exp">Expires</label><input id="fb-exp" class="input" type="date" min="${iso(new Date())}"></div>
+    </div>
+    <label class="fl" for="fb-note">Note (optional)</label>
+    <input id="fb-note" class="input" maxlength="200" placeholder="e.g. min odds 2.0, football only">
+    <button type="button" class="primary" id="fb-save">Add free bet</button>
+    <button type="button" class="text-btn" id="fb-cancel">Cancel</button>
+    <p class="small" id="fb-msg" role="status"></p>`);
+  setTimeout(() => $('#fb-book', sheet).focus(), 250);
+  const msg = $('#fb-msg', sheet);
+  const fail = (t) => { msg.textContent = t; msg.className = 'small err'; };
+  $('#fb-cancel').onclick = closeSettle;
+  $('#fb-save').onclick = async () => {
+    const bookie = $('#fb-book').value.trim(), amount = pnum($('#fb-amt').value), expEl = $('#fb-exp');
+    if (!bookie) return fail('Add the bookie.');
+    if (!amount || amount <= 0) return fail('Amount must be a number.');
+    if (expEl.value && !expEl.validity.valid) return fail('Check the expiry date.');
+    const btn = $('#fb-save'); btn.disabled = true; btn.textContent = 'Adding…';
+    try { await walletPost({ action: 'addFreeBet', bookie, amount, expiry: expEl.value, note: $('#fb-note').value.trim() }); closeSettle(); toast('Free bet added'); }
+    catch (e) { fail(e.message); btn.disabled = false; btn.textContent = 'Add free bet'; }
+  };
+}
+
+/* ---------- pull to refresh ---------- */
+function setupPullToRefresh() {
+  const ptr = $('#ptr');
+  let startY = null, pulling = false;
+  window.addEventListener('touchstart', (e) => {
+    if (window.scrollY > 0 || !$('#sheet').hidden || !$('#setup').hidden || e.touches.length !== 1) { startY = null; return; }
+    startY = e.touches[0].clientY; pulling = false;
+  }, { passive: true });
+  window.addEventListener('touchmove', (e) => {
+    if (startY == null) return;
+    const dy = e.touches[0].clientY - startY;
+    if (dy > 10 && window.scrollY <= 0) {
+      pulling = true;
+      const p = Math.min(dy, 120);
+      ptr.classList.add('show');
+      ptr.style.transform = `translate(-50%, ${p * 0.6}px) rotate(${p * 3}deg)`;
+      ptr.classList.toggle('ready', p >= 80);
+    }
+  }, { passive: true });
+  window.addEventListener('touchend', () => {
+    if (startY == null) return;
+    const ready = ptr.classList.contains('ready');
+    startY = null; ptr.classList.remove('ready'); ptr.style.transform = '';
+    if (pulling && ready) { ptr.classList.add('spin'); load(true); } else ptr.classList.remove('show');
+    pulling = false;
+  });
 }
 
 /* ---------- settings & themes ---------- */
@@ -980,8 +1269,8 @@ function init() {
     if (S.tab === b.dataset.tab) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
     S.tab = b.dataset.tab; window.scrollTo(0, 0); render();
   }));
-  $('#refresh').addEventListener('click', () => load(true));
-  $('#settings').addEventListener('click', openSettings);
+  $('#menu').addEventListener('click', openMenu);
+  setupPullToRefresh();
   applyTheme(S.theme);
   window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => applyTheme(S.theme));
   $('#save').addEventListener('click', saveLink);
