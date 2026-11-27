@@ -67,12 +67,18 @@ const S = {
   betLimit: 40,
   loading: false,
   error: '',
-  form: { type: '', book: '', match: '', backOdds: '', amount: '', layOdds: '', over: {}, freeBetId: '' },
+  form: null,
   commission: prefs.commission != null ? prefs.commission : 0,
   day: null, // null = today; otherwise 'YYYY-MM-DD'
+  calMonth: null, // null = this month; otherwise 'YYYY-MM'
+  repMonth: null,
   theme: ['auto', 'dark', 'light', 'temple', 'party'].includes(prefs.theme) ? prefs.theme : 'auto',
   saving: false
 };
+function blankForm() {
+  return { type: '', book: '', match: '', backOdds: '', amount: '', layOdds: '', over: {}, freeBetId: '', mode: 'standard', customLay: '', refund: '', keep: '', ewTerms: '0.25', placeLay: '' };
+}
+S.form = blankForm();
 const savePrefs = () => store.set(PREF_KEY, JSON.stringify({ period: S.period, bookSort: S.bookSort, commission: S.commission, theme: S.theme }));
 
 const PERIODS = [
@@ -93,6 +99,8 @@ function normalise(raw) {
     type: typeOf(b['Bet Type']),
     backOdds: toNum(b['Back Odds']),
     layOdds: toNum(b['Lay Odds']),
+    layOddsRaw: b['Lay Odds'] == null ? '' : String(b['Lay Odds']),
+    rawType: String(b['Bet Type'] || '').trim(),
     layReturn: toNum(b['Lay Return']),
     stake: toNum(b['Back Stake']),
     fb: toNum(b['Free Bet Amount']),
@@ -120,7 +128,8 @@ function normalise(raw) {
   const wallet = w ? {
     balances: (w.balances || []).map((b) => ({ bookie: String(b.bookie || ''), balance: Number(b.balance) || 0, updated: String(b.updated || '') })),
     freeBets: (w.freeBets || []).map((f) => ({ id: String(f.id), bookie: String(f.bookie || ''), amount: Number(f.amount) || 0, expiry: toIsoDate(f.expiry), note: String(f.note || '') })),
-    notes: String(w.notes || '')
+    notes: String(w.notes || ''),
+    target: Number(w.target) || 0
   } : null;
   return { bets, gubbed, wallet, updated: raw.updated || new Date().toISOString() };
 }
@@ -244,6 +253,7 @@ async function load(manual) {
     S.error = '';
     store.set(CACHE_KEY, JSON.stringify(raw));
     if (manual) toast('Up to date');
+    setTimeout(flushQueue, 0);
   } catch (e) {
     S.error = e.message || 'Could not load your sheet';
     if (manual || !S.data) toast(S.error.length > 50 ? 'Could not load your sheet' : S.error);
@@ -288,7 +298,7 @@ function render() {
   const up = new Date(S.data.updated);
   $('#updated').textContent = (S.error ? 'Offline · ' : '') + 'Updated ' + up.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
   $$('.tabbar button').forEach((b) => { if (b.dataset.tab === S.tab) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
-  document.body.classList.toggle('on-add', S.tab === 'add' || S.tab === 'wallet');
+  document.body.classList.toggle('on-add', S.tab === 'add' || S.tab === 'wallet' || S.tab === 'report');
   const view = $('#view');
   const form = $('#addForm');
   if (S.tab === 'add' && form && form.contains(document.activeElement)) return; // don't wipe the form while typing
@@ -313,7 +323,9 @@ const VIEWS = {
     const cmp = k.hasPrev ? ` That's <b class="${k.diff >= 0 ? 'pos' : 'neg'}">${gbp(Math.abs(k.diff))}</b> ${k.diff >= 0 ? 'more than' : 'less than'} ${P.prevLabel}.` : '';
     const where = S.book ? ` at <b>${esc(S.book)}</b>` : '';
     return `<div class="stack">
+      ${checkBanner()}
       ${dayCard()}
+      ${targetCard()}
       <p class="lede"><b>${gbp(k.profit)}</b> profit from <b>${int(k.settled)}</b> settled bets ${esc(P.phrase)}${where}.${cmp}</p>
       <div class="kpis">
         <div class="kpi hero"><div class="label">Profit</div><div class="big ${tone(k.profit)}">${gbp(k.profit)}</div><div class="foot">${int(k.settled)} settled bets ${esc(P.phrase)}</div></div>
@@ -323,6 +335,7 @@ const VIEWS = {
         <div class="kpi"><div class="label">Best bet</div><div class="big">${k.best ? gbp(k.best.profit) : '—'}</div><div class="foot">${k.best ? esc(k.best.book + ' · ' + k.best.type) : 'No settled bets'}</div></div>
         <div class="kpi"><div class="label">Open bets</div><div class="big">${int(k.openCount)}</div><div class="foot">${gbp(k.openLiability)} liability</div></div>
       </div>
+      ${calendarCard(S.calMonth, 'cal')}
       <section class="card"><h2>Running total</h2><p class="sub">Settled profit added up day by day</p><div class="chart" id="ch-cum" style="min-height:230px"></div></section>
       <div class="grid2">
         <section class="card"><h2>${C.P.daily ? 'Profit by day' : 'Profit by month'}</h2><p class="sub">Settled bets</p><div class="chart" id="ch-bars"></div></section>
@@ -380,7 +393,7 @@ const VIEWS = {
       <h2>Bets</h2><p class="sub">${esc(C.P.phrase.charAt(0).toUpperCase() + C.P.phrase.slice(1))}, newest first</p>
       <div class="toolbar">
         <input type="search" class="search" id="q" placeholder="Search event, bookie or type" value="${esc(S.q)}" aria-label="Search bets">
-        <div class="chips">${statusChip('all', 'All')}${statusChip('open', 'Open')}${statusChip('settled', 'Settled')}</div>
+        <div class="chips wrap">${statusChip('all', 'All')}${statusChip('open', 'Open')}${statusChip('settled', 'Settled')}${(() => { const n = C.inPeriod.filter((b) => checkBet(b)).length; return n ? statusChip('check', '⚠ Needs checking (' + int(n) + ')') : ''; })()}</div>
       </div>
       <div class="list" id="betList">${betList()}</div>
     </section></div>`;
@@ -403,7 +416,7 @@ function dayCard() {
   const openExp = r2(sum(open, (b) => b.expected));
   const pct = bets.length ? Math.round((settled.length / bets.length) * 100) : 0;
   const list = bets.map((b) => `
-    <div class="row${b.status === 'open' ? ' tap' : ''}"${b.status === 'open' ? ` data-open="${b.row}"` : ''}>
+    <div class="row tap" data-open="${b.row}">
       <div class="main"><div class="title">${esc(b.match || b.book)}</div><div class="meta">${esc(b.book)} · ${esc(b.type)}${b.time && b.time !== '00:00' ? ' · ' + esc(b.time) : ''}</div></div>
       <div class="right"><div class="amt ${b.status === 'open' ? '' : tone(b.profit)}">${b.status === 'open' ? '<span class="tag open">Open</span>' : signed(b.profit)}</div><div class="meta">exp. ${signed(b.expected)}</div></div>
     </div>`).join('');
@@ -436,7 +449,7 @@ function openList() {
 
 function filteredBets() {
   const q = S.q.trim().toLowerCase();
-  return C.inPeriod.filter((b) => (S.betStatus === 'all' || b.status === S.betStatus) && (!q || (b.match + ' ' + b.book + ' ' + b.type).toLowerCase().includes(q)));
+  return C.inPeriod.filter((b) => (S.betStatus === 'all' || (S.betStatus === 'check' ? !!checkBet(b) : b.status === S.betStatus)) && (!q || (b.match + ' ' + b.book + ' ' + b.type).toLowerCase().includes(q)));
 }
 
 function betList() {
@@ -448,11 +461,13 @@ function betList() {
     const profit = b.status === 'open'
       ? `<span class="profit">Expected <b class="${tone(b.expected)}">${gbp(b.expected)}</b></span>`
       : `<span class="profit"><b class="${tone(b.profit)}">${b.profit == null ? '—' : signed(b.profit)}</b></span>`;
-    return `<div class="bet${b.status === 'open' ? ' tap' : ''}"${b.status === 'open' ? ` data-open="${b.row}"` : ''}>
+    const issue = checkBet(b);
+    return `<div class="bet tap${issue ? ' flagged' : ''}" data-open="${b.row}">
       <div class="line1"><span>${esc(b.book)} · ${esc(b.type)}${b.status === 'open' ? '<span class="tag open">Open</span>' : ''}</span><span>${fmtDay(b.date)}</span></div>
       <div class="event">${esc(b.match || '—')}</div>
       <div class="figs">${stake ? `<span>${stake}</span>` : ''}${b.liability != null ? `<span>Liability <b>${gbp(b.liability)}</b></span>` : ''}${profit}</div>
-      ${b.status === 'open' ? '<div class="settle-hint">Tap to settle</div>' : ''}
+      ${issue ? `<div class="check-hint">⚠ ${esc(issue)}</div>` : ''}
+      ${b.status === 'open' ? '<div class="settle-hint">Tap to settle or edit</div>' : ''}
     </div>`;
   }).join('') +
     (rows.length > S.betLimit ? `<button class="more" id="more">Show more</button>` : '') +
@@ -483,11 +498,14 @@ function bindView() {
   const dt = $('#dayToday'); if (dt) dt.onclick = () => { S.day = null; render(); };
   if (S.tab === 'add') bindAdd();
   if (S.tab === 'wallet') bindWallet();
+  if (S.tab === 'report') bindReport();
+  bindOverviewExtras();
 }
 function bindOpen(root) {
   $$('[data-open]', root).forEach((el) => el.addEventListener('click', () => {
-    const b = S.data.bets.find((x) => String(x.row) === el.dataset.open && x.status === 'open');
-    if (b) openSettle(b);
+    const b = S.data.bets.find((x) => String(x.row) === el.dataset.open);
+    if (!b) return;
+    if (b.status === 'open') openSettle(b); else openEdit(b);
   }));
 }
 function bindMore() { const m = $('#more'); if (m) m.onclick = () => { S.betLimit += 40; refreshBetList(); }; }
@@ -495,14 +513,16 @@ function refreshBetList() { const el = $('#betList'); if (el) { el.innerHTML = b
 
 /* ---------- add a bet ---------- */
 const SNR_TYPES = ['Free Bet']; // stake not returned
-const DEFAULT_TYPES = ['Qualifying', 'Free Bet', 'Price Boost', 'Risk Free', 'Money Back', '2up', 'Arb'];
+const DEFAULT_TYPES = ['Qualifying', 'Free Bet', 'Price Boost', 'Risk Free', 'Money Back', '2up', 'Each Way', 'Arb'];
 
 function typeChoices() {
   const count = new Map();
   S.data.bets.forEach((b) => count.set(b.type, (count.get(b.type) || 0) + 1));
   const used = Array.from(count.entries()).sort((a, b) => b[1] - a[1]).map((e) => e[0]).filter((t) => t !== 'Other');
   DEFAULT_TYPES.forEach((t) => { if (!used.includes(t)) used.push(t); });
-  return used.slice(0, 10);
+  const out = used.slice(0, 10);
+  DEFAULT_TYPES.forEach((t) => { if (!out.includes(t)) out.push(t); });
+  return out;
 }
 function recentBooks() {
   const out = [];
@@ -533,7 +553,6 @@ function calcBet(type, backOdds, amount, layOdds, commissionPct) {
 VIEWS.add = function () {
   const f = S.form;
   if (!f.type) f.type = typeChoices()[0] || 'Qualifying';
-  const snr = SNR_TYPES.includes(f.type);
   return `<div class="stack"><section class="card">
     <h2>Add a bet</h2><p class="sub">Goes straight into your sheet as an open bet</p>
     ${f.freeBetId ? `<div class="fb-banner">Using your ${esc(f.book)} free bet. It comes off your Wallet when you add this. <button type="button" class="text-btn" id="fbCancel">Don't use it</button></div>` : ''}
@@ -548,17 +567,13 @@ VIEWS.add = function () {
       <label class="fl" for="f-match">Event</label>
       <input id="f-match" class="input" list="dl-matches" value="${esc(f.match)}" placeholder="e.g. Arsenal vs Chelsea" autocapitalize="words" enterkeyhint="next">
 
-      <div class="grid3">
-        <div><label class="fl" for="f-bo">Back odds</label><input id="f-bo" class="input" inputmode="decimal" value="${esc(f.backOdds)}" placeholder="2.50"></div>
-        <div><label class="fl" for="f-amt" id="amtLabel">${snr ? 'Free bet £' : 'Stake £'}</label><input id="f-amt" class="input" inputmode="decimal" value="${esc(f.amount)}" placeholder="10"></div>
-        <div><label class="fl" for="f-lo">Lay odds</label><input id="f-lo" class="input" inputmode="decimal" value="${esc(f.layOdds)}" placeholder="2.60"></div>
-      </div>
+      <div id="calcFields">${calcFields()}</div>
 
       <div class="calc" id="calc"></div>
 
       <details class="adjust" id="adjust"${Object.keys(f.over).length ? ' open' : ''}>
         <summary>Adjust figures</summary>
-        <p class="small muted">Leave blank to use the calculated figure. Fill in to use your own, such as for a risk-free or money-back offer.</p>
+        <p class="small muted">Leave blank to use the calculated figure, or fill in your own.</p>
         <div class="grid3">
           <div><label class="fl" for="o-lr">Lay return £</label><input id="o-lr" class="input" inputmode="decimal" data-over="layReturn" value="${esc(f.over.layReturn || '')}"></div>
           <div><label class="fl" for="o-li">Liability £</label><input id="o-li" class="input" inputmode="decimal" data-over="liability" value="${esc(f.over.liability || '')}"></div>
@@ -576,42 +591,143 @@ VIEWS.add = function () {
   </section></div>`;
 };
 
+/* Which calculator a bet type uses */
+function calcKind(type) {
+  const t = String(type || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (t === 'freebet' || t === 'snr') return 'snr';
+  if (t.includes('riskfree') || t.includes('moneyback') || t.includes('refund')) return 'refund';
+  if (t.includes('eachway') || t === 'ew') return 'ew';
+  if (t === '2up' || t.includes('earlypayout')) return '2up';
+  return 'normal';
+}
+
+// Your own free bet conversion, used as the default for what a refunded free bet is worth.
+function myKeepRate() {
+  const fb = S.data.bets.filter((b) => b.status === 'settled' && calcKind(b.type) === 'snr' && b.fb);
+  const v = sum(fb, (b) => b.fb);
+  return v ? Math.round((sum(fb, (b) => b.profit) / v) * 100) : 75;
+}
+
+function calcFields() {
+  const f = S.form, kind = calcKind(f.type);
+  const modeChip = (v, l) => `<button type="button" class="chip sm" data-mode="${v}" aria-pressed="${f.mode === v}">${l}</button>`;
+  const termsChip = (v, l) => `<button type="button" class="chip sm" data-terms="${v}" aria-pressed="${f.ewTerms === v}">${l}</button>`;
+  const amtLabel = kind === 'snr' ? 'Free bet £' : kind === 'ew' ? 'Stake each way £' : 'Stake £';
+  return `
+    <div class="grid3">
+      <div><label class="fl" for="f-bo">Back odds</label><input id="f-bo" class="input" inputmode="decimal" value="${esc(f.backOdds)}" placeholder="2.50"></div>
+      <div><label class="fl" for="f-amt">${amtLabel}</label><input id="f-amt" class="input" inputmode="decimal" value="${esc(f.amount)}" placeholder="10"></div>
+      <div><label class="fl" for="f-lo">${kind === 'ew' ? 'Win lay odds' : 'Lay odds'}</label><input id="f-lo" class="input" inputmode="decimal" value="${esc(f.layOdds)}" placeholder="2.60"></div>
+    </div>
+    ${kind === 'refund' ? `
+    <div class="grid2f">
+      <div><label class="fl" for="f-ref">Refund if it loses £</label><input id="f-ref" class="input" inputmode="decimal" value="${esc(f.refund)}" placeholder="Same as stake"></div>
+      <div><label class="fl" for="f-keep">Free bet worth %</label><input id="f-keep" class="input" inputmode="decimal" value="${esc(f.keep)}" placeholder="${myKeepRate()}"></div>
+    </div>
+    <p class="small muted">The refund usually comes as a free bet. ${myKeepRate()}% is what you've kept from free bets so far.</p>` : ''}
+    ${kind === 'ew' ? `
+    <div class="fl">Place terms</div>
+    <div class="chips wrap">${termsChip('0.25', '1/4 odds')}${termsChip('0.2', '1/5 odds')}${termsChip('0.1667', '1/6 odds')}${termsChip('0.125', '1/8 odds')}</div>
+    <label class="fl" for="f-plo">Place lay odds</label><input id="f-plo" class="input" inputmode="decimal" value="${esc(f.placeLay)}" placeholder="e.g. 3.1">` : ''}
+    ${kind === 'normal' || kind === '2up' ? `
+    <div class="fl">Lay type</div>
+    <div class="chips wrap" id="modeChips">${modeChip('standard', 'Standard')}${modeChip('under', 'Underlay')}${modeChip('over', 'Overlay')}${modeChip('custom', 'Custom')}</div>
+    ${f.mode === 'custom' ? `<label class="fl" for="f-cl">Your lay stake £</label><input id="f-cl" class="input narrow" inputmode="decimal" value="${esc(f.customLay)}">` : ''}` : ''}`;
+}
+
+// Works out the lay for every kind of offer. Lay Return is saved as lay stake x lay odds, like your sheet.
+function calcAdd() {
+  const f = S.form, kind = calcKind(f.type);
+  const bo = pnum(f.backOdds), amt = pnum(f.amount), lo = pnum(f.layOdds);
+  const c = (pnum(S.commission) || 0) / 100;
+  if (!bo || !amt || !lo || bo <= 1 || lo <= 1) return null;
+  const outcomes = [];
+  let lays, expected;
+  if (kind === 'snr') {
+    const L = (amt * (bo - 1)) / (lo - c);
+    const backWins = amt * (bo - 1) - L * (lo - 1), layWins = L * (1 - c);
+    outcomes.push(['If back wins', backWins], ['If lay wins', layWins]);
+    lays = [[L, lo]]; expected = Math.min(backWins, layWins);
+  } else if (kind === 'refund') {
+    const R = pnum(f.refund) != null ? pnum(f.refund) : amt;
+    const k = (pnum(f.keep) != null ? pnum(f.keep) : myKeepRate()) / 100;
+    const L = Math.max(0, (amt * bo - R * k) / (lo - c));
+    const backWins = amt * (bo - 1) - L * (lo - 1), layWins = L * (1 - c) - amt + R * k;
+    outcomes.push(['If back wins', backWins], ['If lay wins (incl. refund)', layWins]);
+    lays = [[L, lo]]; expected = Math.min(backWins, layWins);
+  } else if (kind === 'ew') {
+    const frac = Number(f.ewTerms) || 0.25, po = 1 + (bo - 1) * frac, plo = pnum(f.placeLay);
+    if (!plo || plo <= 1) return { need: 'Enter the place lay odds too.' };
+    const Lw = (amt * bo) / (lo - c), Lp = (amt * po) / (plo - c);
+    const wins = amt * (bo - 1) + amt * (po - 1) - Lw * (lo - 1) - Lp * (plo - 1);
+    const places = -amt + amt * (po - 1) + Lw * (1 - c) - Lp * (plo - 1);
+    const loses = -2 * amt + Lw * (1 - c) + Lp * (1 - c);
+    outcomes.push(['If it wins', wins], ['If it only places', places], ['If it loses', loses]);
+    lays = [[Lw, lo, 'win'], [Lp, plo, 'place']]; expected = Math.min(wins, places, loses);
+  } else {
+    let L;
+    if (f.mode === 'under') L = amt / (1 - c);
+    else if (f.mode === 'over') L = (amt * (bo - 1)) / (lo - 1);
+    else if (f.mode === 'custom') L = pnum(f.customLay);
+    else L = (amt * bo) / (lo - c);
+    if (L == null || L < 0) return { need: 'Enter your lay stake.' };
+    const backWins = amt * (bo - 1) - L * (lo - 1), layWins = L * (1 - c) - amt;
+    outcomes.push(['If back wins', backWins], ['If lay wins', layWins]);
+    if (kind === '2up') outcomes.push(['Paid out early, then lay wins', amt * (bo - 1) + L * (1 - c)]);
+    lays = [[L, lo]]; expected = Math.min(backWins, layWins);
+  }
+  const layReturn = lays.reduce((a, [L, o]) => a + L * o, 0);
+  const liability = lays.reduce((a, [L, o]) => a + L * (o - 1), 0);
+  return {
+    kind, lays: lays.map(([L, o, m]) => ({ stake: r2(L), odds: o, market: m || '' })),
+    layReturn: r2(layReturn), liability: r2(liability), expected: r2(expected),
+    outcomes: outcomes.map(([l, v]) => [l, r2(v)]), stakeTotal: kind === 'ew' ? amt * 2 : amt
+  };
+}
+
 function currentFigures() {
   const f = S.form;
-  const calc = calcBet(f.type, f.backOdds, f.amount, f.layOdds, S.commission);
-  const pick = (k) => (f.over[k] !== undefined && String(f.over[k]).trim() !== '' ? pnum(f.over[k]) : calc ? calc[k] : null);
-  return { calc, layReturn: pick('layReturn'), liability: pick('liability'), expected: pick('expected') };
+  const calc = calcAdd();
+  const ok = calc && !calc.need;
+  const pick = (k) => (f.over[k] !== undefined && String(f.over[k]).trim() !== '' ? pnum(f.over[k]) : ok ? calc[k] : null);
+  return { calc: ok ? calc : null, need: calc && calc.need, layReturn: pick('layReturn'), liability: pick('liability'), expected: pick('expected') };
 }
 
 function renderCalc() {
   const el = $('#calc'); if (!el) return;
   const fig = currentFigures(), c = fig.calc;
   if (!c) {
-    el.innerHTML = `<div class="calc-empty">Enter back odds, ${SNR_TYPES.includes(S.form.type) ? 'free bet' : 'stake'} and lay odds to work out your lay.</div>`;
+    el.innerHTML = `<div class="calc-empty">${esc(fig.need || 'Enter back odds, ' + (calcKind(S.form.type) === 'snr' ? 'free bet' : 'stake') + ' and lay odds to work out your lay.')}</div>`;
     return;
   }
   el.innerHTML = `
-    <div class="calc-main"><span class="muted">Lay</span> <b>${gbp(c.layStake)}</b> <span class="muted">at</span> <b>${esc(String(pnum(S.form.layOdds)))}</b></div>
+    ${c.lays.map((l) => `<div class="calc-main"><span class="muted">Lay${l.market ? ' ' + l.market : ''}</span> <b>${gbp(l.stake)}</b> <span class="muted">at</span> <b>${esc(String(l.odds))}</b></div>`).join('')}
     <div class="calc-grid">
       <div><span class="muted">Liability</span><b>${gbp(fig.liability)}</b></div>
       <div><span class="muted">Expected</span><b class="${tone(fig.expected)}">${signed(fig.expected)}</b></div>
-      <div><span class="muted">If back wins</span><b class="${tone(c.backWins)}">${signed(c.backWins)}</b></div>
-      <div><span class="muted">If lay wins</span><b class="${tone(c.layWins)}">${signed(c.layWins)}</b></div>
-    </div>`;
+      ${c.outcomes.map(([l, v]) => `<div><span class="muted">${esc(l)}</span><b class="${tone(v)}">${signed(v)}</b></div>`).join('')}
+    </div>
+    ${c.kind === 'normal' || c.kind === '2up' ? `<p class="small muted calc-note">${S.form.mode === 'under' ? 'Underlay: you break even if the lay wins and profit if the back wins.' : S.form.mode === 'over' ? 'Overlay: you break even if the back wins and profit if the lay wins.' : S.form.mode === 'custom' ? 'Expected is the worse of the two outcomes.' : 'Standard: the same result whichever side wins.'}</p>` : ''}`;
 }
 
 function bindAdd() {
   const f = S.form;
-  const amtLabel = $('#amtLabel');
+  const refreshFields = () => { const w = $('#calcFields'); if (w) { w.innerHTML = calcFields(); bindCalcFields(); } renderCalc(); };
   $$('#typeChips [data-type]').forEach((b) => b.addEventListener('click', () => {
     f.type = b.dataset.type;
     $$('#typeChips [data-type]').forEach((o) => o.setAttribute('aria-pressed', String(o === b)));
-    if (amtLabel) amtLabel.textContent = SNR_TYPES.includes(f.type) ? 'Free bet £' : 'Stake £';
-    renderCalc();
+    refreshFields();
   }));
   $$('[data-pickbook]').forEach((b) => b.addEventListener('click', () => { f.book = b.dataset.pickbook; $('#f-book').value = f.book; $('#f-match').focus(); }));
   const bindField = (id, key) => { const el = $(id); if (el) el.addEventListener('input', () => { f[key] = el.value; renderCalc(); }); };
-  bindField('#f-book', 'book'); bindField('#f-match', 'match'); bindField('#f-bo', 'backOdds'); bindField('#f-amt', 'amount'); bindField('#f-lo', 'layOdds');
+  bindField('#f-book', 'book'); bindField('#f-match', 'match');
+  function bindCalcFields() {
+    bindField('#f-bo', 'backOdds'); bindField('#f-amt', 'amount'); bindField('#f-lo', 'layOdds');
+    bindField('#f-ref', 'refund'); bindField('#f-keep', 'keep'); bindField('#f-plo', 'placeLay'); bindField('#f-cl', 'customLay');
+    $$('[data-mode]').forEach((b) => b.addEventListener('click', () => { f.mode = b.dataset.mode; refreshFields(); }));
+    $$('[data-terms]').forEach((b) => b.addEventListener('click', () => { f.ewTerms = b.dataset.terms; refreshFields(); }));
+  }
+  bindCalcFields();
   $$('[data-over]').forEach((el) => el.addEventListener('input', () => {
     if (el.value.trim() === '') delete f.over[el.dataset.over]; else f.over[el.dataset.over] = el.value;
     renderCalc();
@@ -633,17 +749,25 @@ async function submitBet() {
   }
   for (const k of Object.keys(f.over)) if (pnum(f.over[k]) == null) return err('Adjusted figures must be numbers.');
   const fig = currentFigures();
-  const snr = SNR_TYPES.includes(f.type);
+  const kind = calcKind(f.type);
+  const snr = kind === 'snr';
   const amt = pnum(f.amount);
   const bet = {
     bookmaker: f.book.trim(), match: f.match.trim(), type: f.type,
-    backOdds: pnum(f.backOdds), stake: snr ? 0 : amt || 0, freeBet: snr ? amt || 0 : 0,
+    backOdds: pnum(f.backOdds), stake: snr ? 0 : (kind === 'ew' ? (amt || 0) * 2 : amt || 0), freeBet: snr ? amt || 0 : 0,
     layOdds: pnum(f.layOdds), layReturn: fig.layReturn, liability: fig.liability, expected: fig.expected
   };
   btn.disabled = true; btn.textContent = 'Adding…'; msg.textContent = 'Sending to your sheet…'; msg.className = 'small muted';
   try {
-    await postSheet({ action: 'add', bet, useFreeBet: f.freeBetId || undefined });
-    S.form = { type: f.type, book: '', match: f.match, backOdds: '', amount: '', layOdds: '', over: {}, freeBetId: '' };
+    const j = await postSheet({ action: 'add', bet, useFreeBet: f.freeBetId || undefined }, true);
+    S.form = Object.assign(blankForm(), { type: f.type, match: f.match, mode: f.mode, ewTerms: f.ewTerms, keep: f.keep });
+    if (j.queued) {
+      toast('Saved on your phone');
+      if (document.activeElement) document.activeElement.blur();
+      render();
+      const m = $('#addMsg'); if (m) { m.textContent = 'No signal: saved on your phone. It sends to your sheet automatically when you are back online.'; m.className = 'small warn'; }
+      return;
+    }
     toast('Bet added');
     confetti();
     msg.textContent = 'Added to your sheet.'; msg.className = 'small pos';
@@ -656,21 +780,392 @@ async function submitBet() {
   }
 }
 
-async function postSheet(payload) {
+/* ---------- talking to the sheet, with an offline queue ---------- */
+const QUEUE_KEY = 'mb.queue';
+const QUEUEABLE = ['add', 'settle', 'edit', 'setBalance', 'addFreeBet', 'removeFreeBet', 'setTarget'];
+const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const getQueue = () => { try { return JSON.parse(store.get(QUEUE_KEY) || '[]'); } catch (e) { return []; } };
+const setQueue = (q) => { store.set(QUEUE_KEY, JSON.stringify(q)); showQueueState(); };
+
+async function sendToSheet(payload) {
   const link = store.get(LINK_KEY);
-  if (!link) throw new Error('Connect your sheet first (gear icon).');
+  if (!link) throw new Error('Connect your sheet first (Menu > Settings).');
   let res;
   try {
     res = await fetch(link, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload), redirect: 'follow' });
   } catch (e) {
-    throw new Error(navigator.onLine === false
-      ? 'You are offline. Nothing was saved.'
-      : 'Your sheet would not accept it. In Apps Script, check you did Deploy > Manage deployments > edit > Version: New version > Deploy. Nothing was saved.');
+    const err = new Error('Your sheet would not accept it. In Apps Script, check you did Deploy > Manage deployments > edit > Version: New version > Deploy.');
+    err.network = true; throw err;
   }
   let j;
   try { j = await res.json(); } catch (e) { throw new Error('Your sheet did not accept it. Check you redeployed the script as a new version.'); }
   if (!j || !j.ok) throw new Error((j && j.error) || 'Your sheet said no');
   return j;
+}
+
+// Is the phone actually offline? (A failed request alone could also mean the script isn't deployed.)
+async function reallyOffline() {
+  if (navigator.onLine === false) return true;
+  try { await fetch('manifest.webmanifest?ping=' + Date.now(), { cache: 'no-store' }); return false; } catch (e) { return true; }
+}
+
+async function postSheet(payload, queueable) {
+  const p = Object.assign({ clientId: newId() }, payload);
+  try {
+    return await sendToSheet(p);
+  } catch (e) {
+    if (queueable && QUEUEABLE.includes(p.action) && e.network && await reallyOffline()) {
+      const q = getQueue();
+      q.push({ id: p.clientId, payload: p, label: queueLabel(p), at: new Date().toISOString() });
+      setQueue(q);
+      return { ok: true, queued: true };
+    }
+    if (e.network && navigator.onLine === false) throw new Error('You are offline. Nothing was saved.');
+    throw e;
+  }
+}
+
+function queueLabel(p) {
+  if (p.action === 'add') return 'Add ' + p.bet.bookmaker + (p.bet.match ? ' · ' + p.bet.match : '');
+  if (p.action === 'settle') return 'Settle ' + p.bookmaker + (p.match ? ' · ' + p.match : '') + ' (' + signed(p.profit) + ')';
+  if (p.action === 'edit') return 'Edit ' + p.bookmaker + (p.match ? ' · ' + p.match : '');
+  if (p.action === 'setBalance') return (p.remove ? 'Remove balance ' : 'Balance ') + p.bookie + (p.remove ? '' : ' ' + gbp(p.balance));
+  if (p.action === 'addFreeBet') return 'Free bet ' + p.bookie + ' ' + gbp(p.amount);
+  if (p.action === 'removeFreeBet') return 'Remove a free bet';
+  if (p.action === 'setTarget') return 'Monthly target ' + gbp(p.target);
+  return p.action;
+}
+
+let flushing = false;
+async function flushQueue() {
+  if (flushing || !getQueue().length || navigator.onLine === false) return;
+  flushing = true;
+  let sent = 0;
+  try {
+    for (const item of getQueue()) {
+      try {
+        await sendToSheet(item.payload);
+        setQueue(getQueue().filter((x) => x.id !== item.id));
+        sent++;
+      } catch (e) {
+        if (e.network) break; // still no connection: try again later
+        setQueue(getQueue().map((x) => (x.id === item.id ? Object.assign({}, x, { error: e.message }) : x)));
+      }
+    }
+  } finally { flushing = false; }
+  if (sent) { toast('Sent ' + sent + ' saved ' + (sent === 1 ? 'change' : 'changes') + ' to your sheet'); load(false); }
+}
+
+function showQueueState() {
+  const q = getQueue();
+  let el = $('#queueBar');
+  if (!q.length) { if (el) el.remove(); return; }
+  if (!el) {
+    el = document.createElement('button');
+    el.type = 'button'; el.id = 'queueBar'; el.className = 'queue-bar';
+    el.onclick = openQueue;
+    const top = $('.top'); top.parentNode.insertBefore(el, top.nextSibling);
+  }
+  const failed = q.filter((x) => x.error).length;
+  el.classList.toggle('bad', failed > 0);
+  el.textContent = failed ? `⚠ ${failed} saved ${failed === 1 ? 'change' : 'changes'} couldn't be sent. Tap to see.` : `⏳ ${q.length} ${q.length === 1 ? 'change' : 'changes'} waiting to send when you're back online`;
+}
+
+function openQueue() {
+  const q = getQueue();
+  const sheet = openSheet(`
+    <h2>Waiting to send</h2><p class="sub">Saved on this phone while you had no signal</p>
+    <div class="list">${q.map((x) => `<div class="row"><div class="main"><div class="title">${esc(x.label)}</div><div class="meta">${esc(agoText(x.at))}${x.error ? ` · <span class="neg">${esc(x.error)}</span>` : ''}</div></div>
+      <button type="button" class="icon-btn fb-del" data-qdel="${esc(x.id)}" aria-label="Discard">✕</button></div>`).join('')}</div>
+    <button type="button" class="primary" id="q-send">Send now</button>
+    <button type="button" class="text-btn" id="q-close">Close</button>`);
+  $$('[data-qdel]', sheet).forEach((b) => b.addEventListener('click', () => { setQueue(getQueue().filter((x) => x.id !== b.dataset.qdel)); closeSettle(); if (getQueue().length) setTimeout(openQueue, 220); }));
+  $('#q-send').onclick = async () => {
+    setQueue(getQueue().map((x) => Object.assign({}, x, { error: undefined })));
+    closeSettle(); await flushQueue();
+    if (getQueue().length) toast(navigator.onLine === false ? 'Still offline' : 'Some could not be sent');
+  };
+  $('#q-close').onclick = closeSettle;
+}
+
+/* ---------- number checker ---------- */
+// Flags a bet whose figures don't add up. Uses your sheet's convention: lay stake = Lay Return - Lay Liability.
+function checkBet(b) {
+  if (b._check !== undefined) return b._check;
+  let issue = '';
+  const kind = calcKind(b.rawType || b.type);
+  const lo = b.layOdds, LR = b.layReturn, L = b.liability;
+  if (kind !== 'refund' && kind !== 'ew' && lo > 1 && LR != null && L != null && LR > 0) {
+    const layStake = LR - L;
+    const should = layStake * (lo - 1);
+    if (layStake <= 0) issue = 'Lay return is less than the liability';
+    else if (Math.abs(L - should) > Math.max(0.1, 0.02 * L)) issue = `Liability should be ${gbp(r2(should))} for a ${gbp(r2(layStake))} lay at ${lo}`;
+    else if (b.expected != null && b.backOdds > 1 && (kind === 'normal' || kind === 'snr')) {
+      const amt = n0(kind === 'snr' ? b.fb : b.stake);
+      const c = (S.commission || 0) / 100;
+      const layWins = layStake * (1 - c) - (kind === 'snr' ? 0 : amt), backWins = amt * (b.backOdds - 1) - L;
+      if (Math.abs(b.expected - layWins) > 0.15 && Math.abs(b.expected - backWins) > 0.15) issue = `Expected profit should be about ${signed(r2(Math.min(layWins, backWins)))}`;
+    }
+  }
+  b._check = issue;
+  return issue;
+}
+
+function checkBanner() {
+  const flagged = S.data.bets.filter((b) => b.status === 'open' && checkBet(b) && (!S.book || b.book === S.book));
+  if (!flagged.length) return '';
+  return `<button type="button" class="check-banner" id="checkBanner">⚠ ${flagged.length === 1 ? 'An open bet doesn’t' : flagged.length + ' open bets don’t'} add up: ${esc(flagged[0].book)}${flagged[0].match ? ' · ' + esc(flagged[0].match) : ''}. Tap to fix.</button>`;
+}
+
+/* ---------- edit a bet ---------- */
+function openEdit(b) {
+  const types = typeChoices();
+  if (!types.includes(b.rawType || b.type)) types.push(b.rawType || b.type);
+  const v = (x) => (x == null ? '' : esc(String(x)));
+  const issue = checkBet(b);
+  const sheet = openSheet(`
+    <h2>Edit bet</h2><p class="sub">${esc(b.book)} · ${fmtDay(b.date)}${b.time && b.time !== '00:00' ? ' ' + esc(b.time) : ''}</p>
+    ${issue ? `<div class="check-hint">⚠ ${esc(issue)}</div>` : ''}
+    <div class="edit-grid">
+      <div class="full"><label class="fl" for="e-book">Bookmaker</label><input id="e-book" class="input" value="${v(b.rawBook || b.book)}" autocapitalize="words"></div>
+      <div class="full"><label class="fl" for="e-match">Event</label><input id="e-match" class="input" value="${v(b.match)}" autocapitalize="words"></div>
+      <div class="full"><label class="fl" for="e-type">Bet type</label><input id="e-type" class="input" list="dl-types" value="${v(b.rawType || b.type)}"><datalist id="dl-types">${types.map((t) => `<option value="${esc(t)}">`).join('')}</datalist></div>
+      <div><label class="fl" for="e-bo">Back odds</label><input id="e-bo" class="input" inputmode="decimal" value="${v(b.backOdds)}"></div>
+      <div><label class="fl" for="e-lo">Lay odds</label><input id="e-lo" class="input" inputmode="decimal" value="${v(b.layOddsRaw || b.layOdds)}"></div>
+      <div><label class="fl" for="e-st">Stake £</label><input id="e-st" class="input" inputmode="decimal" value="${v(b.stake)}"></div>
+      <div><label class="fl" for="e-fb">Free bet £</label><input id="e-fb" class="input" inputmode="decimal" value="${v(b.fb)}"></div>
+      <div><label class="fl" for="e-lr">Lay return £</label><input id="e-lr" class="input" inputmode="decimal" value="${v(b.layReturn)}"></div>
+      <div><label class="fl" for="e-li">Liability £</label><input id="e-li" class="input" inputmode="decimal" value="${v(b.liability)}"></div>
+      <div><label class="fl" for="e-ex">Expected £</label><input id="e-ex" class="input" inputmode="text" value="${v(b.expected)}"></div>
+      <div><label class="fl" for="e-pr">Actual profit £</label><input id="e-pr" class="input" inputmode="text" value="${v(b.profit)}" ${b.status === 'open' ? 'placeholder="When settled"' : ''}></div>
+    </div>
+    <div class="fl">Status</div>
+    <div class="chips" id="e-status"><button type="button" class="chip" data-st="Open" aria-pressed="${b.status === 'open'}">Open</button><button type="button" class="chip" data-st="Settled" aria-pressed="${b.status === 'settled'}">Settled</button></div>
+    <button type="button" class="wide-btn" id="e-recalc">Recalculate lay return, liability and expected from the odds</button>
+    <button type="button" class="primary" id="e-save">Save changes</button>
+    <button type="button" class="text-btn" id="e-cancel">Cancel</button>
+    <p class="small" id="e-msg" role="status"></p>`);
+  let status = b.status === 'settled' ? 'Settled' : 'Open';
+  $$('#e-status [data-st]', sheet).forEach((c) => c.addEventListener('click', () => { status = c.dataset.st; $$('#e-status [data-st]', sheet).forEach((o) => o.setAttribute('aria-pressed', String(o === c))); }));
+  const msg = $('#e-msg', sheet);
+  const fail = (t) => { msg.textContent = t; msg.className = 'small err'; };
+  $('#e-recalc').onclick = () => {
+    const type = $('#e-type').value, kind = calcKind(type);
+    const amt = kind === 'snr' ? $('#e-fb').value : $('#e-st').value;
+    const c = calcBet(kind === 'snr' ? 'Free Bet' : type, $('#e-bo').value, amt, $('#e-lo').value, S.commission);
+    if (!c) return fail('Fill in back odds, lay odds and the stake or free bet first.');
+    $('#e-lr').value = c.layReturn; $('#e-li').value = c.liability; $('#e-ex').value = c.expected;
+    msg.textContent = 'Recalculated for a standard lay. Check, then save.'; msg.className = 'small muted';
+  };
+  $('#e-cancel').onclick = closeSettle;
+  $('#e-save').onclick = async () => {
+    const book = $('#e-book').value.trim();
+    if (!book) return fail('Bookmaker is missing.');
+    const numIds = { 'e-bo': 'Back odds', 'e-st': 'Stake', 'e-fb': 'Free bet', 'e-lr': 'Lay return', 'e-li': 'Liability', 'e-ex': 'Expected', 'e-pr': 'Actual profit' };
+    for (const id of Object.keys(numIds)) { const x = $('#' + id).value.trim(); if (x !== '' && pnum(x.replace('−', '-')) == null) return fail(numIds[id] + ' must be a number.'); }
+    const num = (id) => { const x = $('#' + id).value.trim(); return x === '' ? '' : pnum(x.replace('−', '-')); };
+    if (status === 'Settled' && num('e-pr') === '') return fail('Add the actual profit, or set the status to Open.');
+    const lay = $('#e-lo').value.trim();
+    const fields = {
+      bookmaker: book, match: $('#e-match').value.trim(), type: $('#e-type').value.trim(),
+      backOdds: num('e-bo'), stake: num('e-st'), freeBet: num('e-fb'), layOdds: pnum(lay) != null && /^[0-9.]+$/.test(lay) ? pnum(lay) : lay,
+      layReturn: num('e-lr'), liability: num('e-li'), expected: num('e-ex'), profit: num('e-pr'), status
+    };
+    const btn = $('#e-save'); btn.disabled = true; btn.textContent = 'Saving…';
+    try {
+      const j = await postSheet({ action: 'edit', row: b.row, date: b.date, bookmaker: b.rawBook || b.book, match: b.match, fields }, true);
+      closeSettle();
+      if (j.queued) { toast('No signal: saved on your phone, sends automatically'); return; }
+      toast('Bet updated');
+      await load(false);
+    } catch (e) { fail(e.message); btn.disabled = false; btn.textContent = 'Save changes'; }
+  };
+}
+
+/* ---------- monthly target ---------- */
+function monthKey(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1); }
+function monthProfit(key) { return r2(sum(S.data.bets.filter((b) => b.status === 'settled' && b.date.slice(0, 7) === key), (b) => b.profit)); }
+
+function targetCard() {
+  const w = S.data.wallet;
+  if (!w) return '';
+  const now = new Date(), key = monthKey(now);
+  const name = now.toLocaleDateString('en-GB', { month: 'long' });
+  if (!w.target) return `<button type="button" class="target-set" id="targetEdit">🎯 Set a monthly profit target</button>`;
+  const made = monthProfit(key), target = w.target;
+  const pct = Math.max(0, Math.min(100, (made / target) * 100));
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const daysLeft = daysInMonth - now.getDate() + 1;
+  const left = r2(target - made);
+  const expectedPace = (target * (now.getDate() - 1 + 0.5)) / daysInMonth;
+  return `<section class="card target-card" id="targetEdit" role="button" tabindex="0">
+    <div class="card-head"><div><h2>${esc(name)} target</h2><p class="sub">${gbp(made)} of ${gbp(target)} · tap to change</p></div><b class="target-pct">${Math.round(pct)}%</b></div>
+    <div class="day-progress target-bar"><i style="width:${pct}%"></i><span class="pace" style="left:${Math.min(100, (expectedPace / target) * 100)}%"></span></div>
+    <p class="day-note">${left <= 0 ? `🎉 Target hit, ${gbp(-left)} over` : `${gbp(left)} to go · <b>${gbp(r2(left / daysLeft))}</b> a day for the ${daysLeft} ${daysLeft === 1 ? 'day' : 'days'} left${made >= expectedPace ? ' · ahead of pace' : ' · behind pace'}`}</p>
+  </section>`;
+}
+
+function openTarget() {
+  const cur = S.data.wallet ? S.data.wallet.target : 0;
+  const sheet = openSheet(`
+    <h2>Monthly target</h2><p class="sub">Profit you're aiming for each month. Saved in your sheet.</p>
+    <label class="fl" for="t-amt">Target £</label>
+    <input id="t-amt" class="input" inputmode="decimal" value="${cur || ''}" placeholder="e.g. 600">
+    <button type="button" class="primary" id="t-save">Save</button>
+    ${cur ? '<button type="button" class="text-btn neg" id="t-clear">Remove target</button>' : ''}
+    <button type="button" class="text-btn" id="t-cancel">Cancel</button>
+    <p class="small" id="t-msg"></p>`);
+  setTimeout(() => $('#t-amt', sheet).focus(), 250);
+  const save = async (val) => {
+    try { await walletPost({ action: 'setTarget', target: val }); closeSettle(); toast(val ? 'Target set to ' + gbp(val) : 'Target removed'); render(); }
+    catch (e) { const m = $('#t-msg'); m.textContent = e.message; m.className = 'small err'; }
+  };
+  $('#t-save').onclick = () => { const v = pnum($('#t-amt').value); if (v == null || v <= 0) { const m = $('#t-msg'); m.textContent = 'Enter an amount.'; m.className = 'small err'; return; } save(v); };
+  const clr = $('#t-clear'); if (clr) clr.onclick = () => save(0);
+  $('#t-cancel').onclick = closeSettle;
+}
+
+/* ---------- profit calendar ---------- */
+function calendarCard(monthIso, id) {
+  const now = new Date();
+  const key = monthIso || monthKey(now);
+  const [y, m] = key.split('-').map(Number);
+  const first = new Date(y, m - 1, 1), days = new Date(y, m, 0).getDate();
+  const offset = (first.getDay() + 6) % 7; // Monday first
+  const byDay = new Map();
+  S.data.bets.forEach((b) => {
+    if (b.status !== 'settled' || b.date.slice(0, 7) !== key || (S.book && b.book !== S.book)) return;
+    byDay.set(b.date, r2(n0(byDay.get(b.date)) + n0(b.profit)));
+  });
+  const vals = Array.from(byDay.values());
+  const maxAbs = Math.max(1, ...vals.map(Math.abs));
+  const total = r2(vals.reduce((a, v) => a + v, 0));
+  const today = iso(now);
+  const cells = [];
+  for (let i = 0; i < offset; i++) cells.push('<div class="cal-cell empty"></div>');
+  for (let d = 1; d <= days; d++) {
+    const ds = key + '-' + pad(d), v = byDay.get(ds);
+    const a = v == null ? 0 : 0.18 + 0.82 * Math.min(1, Math.abs(v) / maxAbs);
+    const bg = v == null ? '' : `style="--a:${a.toFixed(2)}"`;
+    cells.push(`<button type="button" class="cal-cell${v == null ? '' : v < 0 ? ' neg' : ' pos'}${ds === today ? ' today' : ''}${ds > today ? ' future' : ''}" data-calday="${ds}" ${bg} aria-label="${fmtDay(ds)}${v == null ? '' : ' ' + signed(v)}"><span class="d">${d}</span>${v == null ? '' : `<span class="v">${esc(Math.abs(v) >= 100 ? gbp0(v) : signed(v).replace('£', ''))}</span>`}</button>`);
+  }
+  const prevKey = monthKey(new Date(y, m - 2, 1)), nextKey = monthKey(new Date(y, m, 1));
+  return `<section class="card cal-card" id="${id}">
+    <div class="day-head">
+      <button type="button" class="icon-btn day-nav" data-cal="${prevKey}" data-calid="${id}" aria-label="Previous month">‹</button>
+      <div class="day-title"><h2>${esc(fmtMonthLong(key))}</h2><p class="sub">${byDay.size ? `${signed(total)} over ${byDay.size} ${byDay.size === 1 ? 'day' : 'days'}` : 'No settled bets'}${S.book ? ' at ' + esc(S.book) : ''}</p></div>
+      <button type="button" class="icon-btn day-nav" data-cal="${nextKey}" data-calid="${id}" aria-label="Next month"${nextKey > monthKey(now) ? ' disabled' : ''}>›</button>
+    </div>
+    <div class="cal-grid">${['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((d) => `<div class="cal-dow">${d}</div>`).join('')}${cells.join('')}</div>
+    <p class="day-note no-print">Tap a day to see its bets.</p>
+  </section>`;
+}
+
+function bindOverviewExtras() {
+  const t = $('#targetEdit'); if (t) t.onclick = openTarget;
+  const cb = $('#checkBanner');
+  if (cb) cb.onclick = () => { const b = S.data.bets.find((x) => x.status === 'open' && checkBet(x) && (!S.book || x.book === S.book)); if (b) openEdit(b); };
+  $$('[data-cal]').forEach((b) => b.addEventListener('click', () => {
+    if (b.dataset.calid === 'rep-cal') S.repMonth = b.dataset.cal; else S.calMonth = b.dataset.cal === monthKey(new Date()) ? null : b.dataset.cal;
+    render();
+  }));
+  $$('[data-calday]').forEach((b) => b.addEventListener('click', () => {
+    if (b.classList.contains('future')) return;
+    S.day = b.dataset.calday === iso(new Date()) ? null : b.dataset.calday;
+    S.tab = 'overview'; render();
+    const d = $('#day'); if (d) d.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }));
+}
+
+/* ---------- monthly report ---------- */
+function reportData(key) {
+  const [y, m] = key.split('-').map(Number);
+  const prevKey = monthKey(new Date(y, m - 2, 1));
+  const bets = S.data.bets.filter((b) => b.date.slice(0, 7) === key);
+  const settled = bets.filter((b) => b.status === 'settled');
+  const profit = r2(sum(settled, (b) => b.profit));
+  const prev = monthProfit(prevKey);
+  const exp = r2(sum(settled, (b) => b.expected));
+  const fb = settled.filter((b) => calcKind(b.type) === 'snr');
+  const fbV = sum(fb, (b) => b.fb), fbP = sum(fb, (b) => b.profit);
+  const days = new Map(); settled.forEach((b) => days.set(b.date, n0(days.get(b.date)) + n0(b.profit)));
+  const dayList = Array.from(days.entries()).sort((a, b) => b[1] - a[1]);
+  const group = (keyFn) => { const g = new Map(); settled.forEach((b) => { const k = keyFn(b); const o = g.get(k) || { name: k, bets: 0, profit: 0 }; o.bets++; o.profit += n0(b.profit); g.set(k, o); }); return Array.from(g.values()).map((o) => Object.assign(o, { profit: r2(o.profit) })).sort((a, b) => b.profit - a.profit); };
+  return {
+    key, prevKey, bets: bets.length, settled: settled.length, open: bets.length - settled.length, profit, prev, diff: r2(profit - prev),
+    exp, vsExp: r2(profit - exp), fbConv: fbV ? Math.round((fbP / fbV) * 1000) / 10 : null, fbValue: r2(fbV),
+    best: dayList[0], worst: dayList.length > 1 ? dayList[dayList.length - 1] : null, daysBet: days.size,
+    perDay: days.size ? r2(profit / days.size) : 0,
+    books: group((b) => b.book), types: group((b) => b.type),
+    target: S.data.wallet && S.data.wallet.target ? S.data.wallet.target : 0
+  };
+}
+
+VIEWS.report = function () {
+  const now = new Date();
+  const key = S.repMonth || monthKey(now);
+  const r = reportData(key);
+  const name = fmtMonthLong(key);
+  const isThis = key === monthKey(now);
+  const top = r.books.slice(0, 5), worst = r.books.length > 5 ? r.books.slice(-3).reverse().filter((b) => b.profit < 0) : [];
+  return `<div class="stack report" id="report">
+    <div class="wallet-head no-print"><button type="button" class="text-btn" id="repBack">‹ Back</button><h2>Monthly report</h2><span></span></div>
+    <h1 class="print-only">Matched betting · ${esc(name)}</h1>
+    ${calendarCard(key, 'rep-cal')}
+    <div class="kpis">
+      <div class="kpi hero"><div class="label">Profit</div><div class="big ${tone(r.profit)}">${gbp(r.profit)}</div><div class="foot">${isThis ? 'So far · ' : ''}${int(r.settled)} settled bets over ${int(r.daysBet)} days${r.open ? ` · ${int(r.open)} still open` : ''}</div></div>
+      <div class="kpi"><div class="label">vs ${esc(fmtMonthLong(r.prevKey).split(' ')[0])}</div><div class="big ${tone(r.diff)}">${signed(r.diff)}</div><div class="foot">${gbp(r.prev)} last month</div></div>
+      <div class="kpi"><div class="label">vs expected</div><div class="big ${tone(r.vsExp)}">${signed(r.vsExp)}</div><div class="foot">${gbp(r.exp)} expected</div></div>
+      <div class="kpi"><div class="label">Per betting day</div><div class="big">${gbp(r.perDay)}</div><div class="foot">${int(r.daysBet)} days with bets</div></div>
+      <div class="kpi"><div class="label">Free bet conversion</div><div class="big">${r.fbConv == null ? '—' : r.fbConv.toFixed(1) + '%'}</div><div class="foot">from ${gbp(r.fbValue)} of free bets</div></div>
+      ${r.target ? `<div class="kpi"><div class="label">Target</div><div class="big ${r.profit >= r.target ? 'pos' : ''}">${Math.round((r.profit / r.target) * 100)}%</div><div class="foot">${r.profit >= r.target ? 'Hit' : 'Of'} ${gbp(r.target)}</div></div>` : ''}
+    </div>
+    <div class="grid2">
+      <section class="card"><h2>Best and worst days</h2>
+        <div class="list">
+          ${r.best ? `<div class="row"><div class="main"><div class="title">Best: ${esc(fmtDay(r.best[0]))}</div></div><div class="right"><div class="amt ${tone(r.best[1])}">${signed(r2(r.best[1]))}</div></div></div>` : '<div class="empty">No settled bets.</div>'}
+          ${r.worst ? `<div class="row"><div class="main"><div class="title">Worst: ${esc(fmtDay(r.worst[0]))}</div></div><div class="right"><div class="amt ${tone(r.worst[1])}">${signed(r2(r.worst[1]))}</div></div></div>` : ''}
+        </div></section>
+      <section class="card"><h2>Top bookies</h2>
+        <div class="list">${top.length ? top.map((b) => `<div class="row"><div class="main"><div class="title">${esc(b.name)}</div><div class="meta">${int(b.bets)} bets</div></div><div class="right"><div class="amt ${tone(b.profit)}">${signed(b.profit)}</div></div></div>`).join('') : '<div class="empty">No settled bets.</div>'}
+        ${worst.map((b) => `<div class="row"><div class="main"><div class="title">${esc(b.name)}</div><div class="meta">${int(b.bets)} bets</div></div><div class="right"><div class="amt neg">${signed(b.profit)}</div></div></div>`).join('')}</div></section>
+    </div>
+    <section class="card"><h2>By bet type</h2>
+      <div class="list">${r.types.length ? r.types.map((t) => `<div class="row"><div class="main"><div class="title">${esc(t.name)}</div><div class="meta">${int(t.bets)} bets</div></div><div class="right"><div class="amt ${tone(t.profit)}">${signed(t.profit)}</div></div></div>`).join('') : '<div class="empty">No settled bets.</div>'}</div></section>
+    <div class="report-actions no-print">
+      <button type="button" class="primary" id="repShare">Share summary</button>
+      <button type="button" class="wide-btn" id="repPdf">Save as PDF</button>
+    </div>
+  </div>`;
+};
+
+function reportText(r) {
+  const name = fmtMonthLong(r.key);
+  const lines = [
+    `Matched betting · ${name}`,
+    `Profit: ${gbp(r.profit)} from ${r.settled} settled bets (${signed(r.diff)} vs last month)`,
+    `Expected: ${gbp(r.exp)} (${signed(r.vsExp)})`,
+    r.fbConv != null ? `Free bet conversion: ${r.fbConv.toFixed(1)}%` : '',
+    r.target ? `Target: ${gbp(r.target)} (${Math.round((r.profit / r.target) * 100)}%)` : '',
+    r.best ? `Best day: ${fmtDay(r.best[0])} ${signed(r2(r.best[1]))}` : '',
+    r.books.length ? `Top bookie: ${r.books[0].name} ${signed(r.books[0].profit)}` : ''
+  ];
+  return lines.filter(Boolean).join('\n');
+}
+
+function bindReport() {
+  const back = $('#repBack'); if (back) back.onclick = () => { S.tab = 'overview'; render(); };
+  $$('[data-rep]').forEach((b) => b.addEventListener('click', () => { S.repMonth = b.dataset.rep; render(); }));
+  const key = S.repMonth || monthKey(new Date());
+  const share = $('#repShare');
+  if (share) share.onclick = async () => {
+    const text = reportText(reportData(key));
+    try {
+      if (navigator.share) await navigator.share({ title: 'Matched betting · ' + fmtMonthLong(key), text });
+      else { await navigator.clipboard.writeText(text); toast('Summary copied'); }
+    } catch (e) { /* share cancelled */ }
+  };
+  const pdf = $('#repPdf'); if (pdf) pdf.onclick = () => window.print();
 }
 
 /* ---------- settle an open bet ---------- */
@@ -701,6 +1196,7 @@ function openSettle(b) {
     <input id="st-profit" class="input" inputmode="text" value="${esc(start)}">
     <p class="small muted">Use a minus sign for a loss, e.g. -0.45</p>
     <button type="button" class="primary" id="st-save">Settle bet</button>
+    <button type="button" class="wide-btn" id="st-edit">Edit bet details</button>
     <button type="button" class="text-btn" id="st-cancel">Cancel</button>
     <p class="small" id="st-msg" role="status"></p>
   </div>`;
@@ -712,6 +1208,7 @@ function openSettle(b) {
     $$('.outcome', sheet).forEach((x) => x.classList.toggle('on', x === o));
   }));
   $('#st-cancel').onclick = closeSettle;
+  $('#st-edit').onclick = () => { closeSettle(); setTimeout(() => openEdit(b), 220); };
   sheet.onclick = (e) => { if (e.target === sheet) closeSettle(); };
   $('#st-save').onclick = async () => {
     const msg = $('#st-msg'), btn = $('#st-save');
@@ -719,8 +1216,9 @@ function openSettle(b) {
     if (v == null) { msg.textContent = 'Enter the profit as a number.'; msg.className = 'small err'; return; }
     btn.disabled = true; btn.textContent = 'Saving…';
     try {
-      await postSheet({ action: 'settle', row: b.row, date: b.date, bookmaker: b.rawBook || b.book, match: b.match, profit: v });
+      const j = await postSheet({ action: 'settle', row: b.row, date: b.date, bookmaker: b.rawBook || b.book, match: b.match, profit: v }, true);
       closeSettle();
+      if (j.queued) { toast('No signal: saved on your phone, sends automatically'); return; }
       toast('Settled ' + signed(v));
       if (v > 0) confetti();
       await load(false);
@@ -767,6 +1265,10 @@ function openMenu() {
         <span class="mi-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h15a3 3 0 0 1 3 3v7a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V7zm0 0 2-3h11v3M16 13.5h2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
         <span class="mi-text"><b>Wallet & notes</b><span>${t ? `${gbp(t.balance)} in balances · ${int(t.freeBets)} free ${t.freeBets === 1 ? 'bet' : 'bets'}${t.expiringSoon ? ` · ${t.expiringSoon} expiring soon` : ''}` : 'Balances, free bets and notes'}</span></span>
       </button>
+      <button type="button" class="menu-item" data-menu="report">
+        <span class="mi-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l5 5v13H7zM14 3v5h5M10 17v-3M13 17v-5M16 17v-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        <span class="mi-text"><b>Monthly report</b><span>A month's summary to save or share</span></span>
+      </button>
       <button type="button" class="menu-item" data-menu="refresh">
         <span class="mi-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
         <span class="mi-text"><b>Refresh</b><span>Or pull down on any page</span></span>
@@ -781,6 +1283,7 @@ function openMenu() {
     const k = b.dataset.menu;
     closeSettle();
     if (k === 'wallet') { S.tab = 'wallet'; window.scrollTo(0, 0); render(); }
+    if (k === 'report') { S.tab = 'report'; S.repMonth = null; window.scrollTo(0, 0); render(); }
     if (k === 'refresh') load(true);
     if (k === 'settings') setTimeout(openSettings, 220);
   }));
@@ -868,7 +1371,7 @@ function bindWallet() {
   $('#fbAdd').onclick = openFreeBetForm;
   $$('[data-fbuse]').forEach((el) => el.addEventListener('click', () => {
     const f = S.data.wallet.freeBets.find((x) => x.id === el.dataset.fbuse); if (!f) return;
-    S.form = { type: 'Free Bet', book: f.bookie, match: '', backOdds: '', amount: String(f.amount), layOdds: '', over: {}, freeBetId: f.id };
+    S.form = Object.assign(blankForm(), { type: 'Free Bet', book: f.bookie, amount: String(f.amount), freeBetId: f.id });
     S.tab = 'add'; window.scrollTo(0, 0); render();
   }));
   $$('[data-fbdel]').forEach((el) => el.addEventListener('click', async () => {
@@ -904,7 +1407,8 @@ async function saveNotes() {
 
 // Sends a wallet change and redraws with the wallet the sheet sends back.
 async function walletPost(payload) {
-  const j = await postSheet(payload);
+  const j = await postSheet(payload, true);
+  if (j.queued) { toast('No signal: saved on your phone, sends automatically'); return j; }
   if (j.wallet) {
     const keepNotes = S.data.wallet ? S.data.wallet.notes : '';
     S.data.wallet = normalise({ bets: [], wallet: j.wallet }).wallet;
@@ -1270,6 +1774,8 @@ function init() {
     S.tab = b.dataset.tab; window.scrollTo(0, 0); render();
   }));
   $('#menu').addEventListener('click', openMenu);
+  window.addEventListener('online', flushQueue);
+  showQueueState();
   setupPullToRefresh();
   applyTheme(S.theme);
   window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => applyTheme(S.theme));
