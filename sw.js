@@ -1,7 +1,7 @@
 // Caches the app itself so it opens instantly and works offline.
 // Your bets are never cached here: they always come fresh from your sheet.
-const VERSION = 'mb-v20';
-const SHELL = ['./', 'index.html', 'styles.css?v=20', 'app.js?v=20', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
+const VERSION = 'mb-v21';
+const SHELL = ['./', 'index.html', 'styles.css?v=21', 'app.js?v=21', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
