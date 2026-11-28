@@ -71,6 +71,7 @@ const S = {
   error: '',
   form: null,
   commission: prefs.commission != null ? prefs.commission : 0,
+  exchange: prefs.exchange || 'Smarkets',
   day: null, // null = today; otherwise 'YYYY-MM-DD'
   calMonth: null, // null = this month; otherwise 'YYYY-MM'
   repMonth: null,
@@ -81,7 +82,7 @@ function blankForm() {
   return { type: '', book: '', match: '', backOdds: '', amount: '', layOdds: '', over: {}, freeBetId: '', mode: 'standard', customLay: '', refund: '', keep: '', ewTerms: '0.25', placeLay: '' };
 }
 S.form = blankForm();
-const savePrefs = () => store.set(PREF_KEY, JSON.stringify({ period: S.period, bookSort: S.bookSort, commission: S.commission, theme: S.theme, rtp: prefs.rtp, srtp: prefs.srtp }));
+const savePrefs = () => store.set(PREF_KEY, JSON.stringify({ period: S.period, bookSort: S.bookSort, commission: S.commission, exchange: S.exchange, theme: S.theme, rtp: prefs.rtp, srtp: prefs.srtp }));
 
 const PERIODS = [
   ['month', 'Month'],
@@ -1021,7 +1022,7 @@ async function submitBet() {
   };
   btn.disabled = true; btn.textContent = 'Adding…'; msg.textContent = 'Sending to your sheet…'; msg.className = 'small muted';
   try {
-    const j = await postSheet({ action: 'add', bet, useFreeBet: f.freeBetId || undefined }, true);
+    const j = await postSheet({ action: 'add', bet, useFreeBet: f.freeBetId || undefined, moves: movesForAdd(bet) }, true);
     S.form = Object.assign(blankForm(), { type: f.type, match: f.match, mode: f.mode, ewTerms: f.ewTerms, keep: f.keep });
     if (j.queued) {
       toast('Saved on your phone');
@@ -1030,7 +1031,7 @@ async function submitBet() {
       const m = $('#addMsg'); if (m) { m.textContent = 'No signal: saved on your phone. It sends to your sheet automatically when you are back online.'; m.className = 'small warn'; }
       return;
     }
-    toast('Bet added');
+    toast('Bet added' + movesText(j.moved));
     confetti();
     msg.textContent = 'Added to your sheet.'; msg.className = 'small pos';
     if (document.activeElement) document.activeElement.blur();
@@ -1436,6 +1437,30 @@ function bindReport() {
   const pdf = $('#repPdf'); if (pdf) pdf.onclick = () => window.print();
 }
 
+/* ---------- automatic balance tracking ----------
+   Only bookies/exchanges that already have a balance in Offers > Balances are changed. */
+function movesForAdd(bet) {
+  const m = [];
+  if (bet.stake > 0) m.push({ bookie: bet.bookmaker, delta: -r2(bet.stake) });
+  if (bet.liability > 0 && S.exchange) m.push({ bookie: S.exchange, delta: -r2(bet.liability) });
+  return m;
+}
+function movesForSettle(b, out, layStake) {
+  const snr = SNR_TYPES.includes(b.type);
+  if (out === 'back' && b.backOdds > 1) {
+    const back = snr ? n0(b.fb) * (b.backOdds - 1) : n0(b.stake) * b.backOdds;
+    return back > 0 ? [{ bookie: b.rawBook || b.book, delta: r2(back) }] : [];
+  }
+  if (out === 'lay' && b.liability > 0 && layStake != null && S.exchange) {
+    return [{ bookie: S.exchange, delta: r2(b.liability + layStake * (1 - (S.commission || 0) / 100)) }];
+  }
+  return [];
+}
+function movesText(moved) {
+  if (!moved || !moved.length) return '';
+  return ' · ' + moved.map((x) => x.bookie + ' ' + signed(x.delta)).join(', ');
+}
+
 /* ---------- settle an open bet ---------- */
 function openSettle(b) {
   const calc = calcBet(b.type, b.backOdds, SNR_TYPES.includes(b.type) ? b.fb : b.stake, b.layOdds, S.commission);
@@ -1457,8 +1482,8 @@ function openSettle(b) {
     <h2 id="st-title">${esc(b.match || b.book)}</h2>
     <p class="sub">${esc(b.book)} · ${esc(b.type)} · ${fmtDay(b.date)}</p>
     <div class="outcomes">
-      ${backWins != null ? `<button type="button" class="outcome" data-val="${backWins}"><span>Back won</span><b class="${tone(backWins)}">${signed(backWins)}</b></button>` : ''}
-      ${layWins != null ? `<button type="button" class="outcome" data-val="${layWins}"><span>Lay won</span><b class="${tone(layWins)}">${signed(layWins)}</b></button>` : ''}
+      ${backWins != null ? `<button type="button" class="outcome" data-out="back" data-val="${backWins}"><span>Back won</span><b class="${tone(backWins)}">${signed(backWins)}</b></button>` : ''}
+      ${layWins != null ? `<button type="button" class="outcome" data-out="lay" data-val="${layWins}"><span>Lay won</span><b class="${tone(layWins)}">${signed(layWins)}</b></button>` : ''}
     </div>
     <label class="fl" for="st-profit">Actual profit £</label>
     <input id="st-profit" class="input" inputmode="text" value="${esc(start)}">
@@ -1471,8 +1496,9 @@ function openSettle(b) {
   sheet.hidden = false;
   requestAnimationFrame(() => sheet.classList.add('show'));
   const input = $('#st-profit');
+  let picked = '';
   $$('.outcome', sheet).forEach((o) => o.addEventListener('click', () => {
-    input.value = o.dataset.val;
+    input.value = o.dataset.val; picked = o.dataset.out;
     $$('.outcome', sheet).forEach((x) => x.classList.toggle('on', x === o));
   }));
   $('#st-cancel').onclick = closeSettle;
@@ -1484,10 +1510,15 @@ function openSettle(b) {
     if (v == null) { msg.textContent = 'Enter the profit as a number.'; msg.className = 'small err'; return; }
     btn.disabled = true; btn.textContent = 'Saving…';
     try {
-      const j = await postSheet({ action: 'settle', row: b.row, date: b.date, bookmaker: b.rawBook || b.book, match: b.match, profit: v }, true);
+      // Which side won: the button tapped (if the number wasn't changed after), else whichever figure matches.
+      const near = (x) => x != null && Math.abs(x - v) < 0.015;
+      let out = picked && near(pnum($(`.outcome[data-out="${picked}"]`, sheet).dataset.val)) ? picked : '';
+      if (!out) out = near(backWins) && !near(layWins) ? 'back' : near(layWins) && !near(backWins) ? 'lay' : '';
+      const moves = movesForSettle(b, out, layStake);
+      const j = await postSheet({ action: 'settle', row: b.row, date: b.date, bookmaker: b.rawBook || b.book, match: b.match, profit: v, moves }, true);
       closeSettle();
       if (j.queued) { toast('No signal: saved on your phone, sends automatically'); return; }
-      toast('Settled ' + signed(v));
+      toast('Settled ' + signed(v) + movesText(j.moved));
       if (v > 0) confetti();
       await load(false);
     } catch (e) {
@@ -2029,6 +2060,8 @@ function openSettings() {
     <div class="fl">Theme</div>
     <div class="themes">${THEMES.map(([k, l]) => `<button type="button" class="theme-opt" data-theme-pick="${k}" aria-pressed="${S.theme === k}"><span class="swatch sw-${k}"></span>${l}</button>`).join('')}</div>
     <div class="set-row" style="margin-top:12px"><label for="set-comm">Exchange commission %</label><input id="set-comm" class="input" inputmode="decimal" value="${esc(S.commission)}"></div>
+    <div class="set-row"><label for="set-ex">Lay exchange</label><input id="set-ex" class="input" value="${esc(S.exchange)}" autocapitalize="words" style="max-width:140px"></div>
+    <p class="muted small" style="margin:0 0 4px">Balances update automatically when you add or settle a bet in the app. Liability comes off this exchange.</p>
     <div class="fl" style="margin-top:14px">Bookie logo</div>
     <p class="muted small" style="margin:0 0 8px">Wrong or missing logo? Pick the bookie and paste its website.</p>
     <div class="logo-fix">
@@ -2052,6 +2085,7 @@ function openSettings() {
   comm.addEventListener('input', () => { const v = pnum(comm.value); S.commission = v == null ? 0 : v; savePrefs(); if (S.tab === 'add') renderCalc(); });
   $('#set-link').onclick = () => { closeSettle(); setTimeout(() => showSetup(true), 220); };
   $('#set-close').onclick = closeSettle;
+  const ex = $('#set-ex'); ex.addEventListener('input', () => { S.exchange = ex.value.trim(); savePrefs(); });
   const lgBook = $('#lg-book'), lgSite = $('#lg-site'), lgMsg = $('#lg-msg');
   const showSite = () => { const k = logoKey(lgBook.value); lgSite.value = LOGO_SITES[k] || ''; };
   if (lgBook) { lgBook.onchange = showSite; showSite(); }
