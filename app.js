@@ -572,6 +572,7 @@ function dayCardInner() {
   const pct = bets.length ? Math.round((settled.length / bets.length) * 100) : 0;
   const list = bets.map((b) => `
     <div class="row tap" data-open="${b.row}">
+      ${avatar(b.book)}
       <div class="main"><div class="title">${esc(b.match || b.book)}</div><div class="meta">${esc(b.book)} · ${esc(b.type)}${b.time && b.time !== '00:00' ? ' · ' + esc(b.time) : ''}</div></div>
       <div class="right"><div class="amt ${b.status === 'open' ? '' : tone(b.profit)}">${b.status === 'open' ? '<span class="tag open">Open</span>' : signed(b.profit)}</div><div class="meta">exp. ${signed(b.expected)}</div></div>
     </div>`).join('');
@@ -598,7 +599,7 @@ function dayCardInner() {
 function openList() {
   if (!C.open.length) return `<div class="empty">No open bets right now.</div>`;
   return `<div class="list">${C.open.map((b) => `
-    <div class="row tap" data-open="${b.row}"><div class="main"><div class="title">${esc(b.match || b.book)}</div><div class="meta">${esc(b.book)} · ${esc(b.type)} · ${fmtShort(b.date)}</div></div>
+    <div class="row tap" data-open="${b.row}">${avatar(b.book)}<div class="main"><div class="title">${esc(b.match || b.book)}</div><div class="meta">${esc(b.book)} · ${esc(b.type)} · ${fmtShort(b.date)}</div></div>
     <div class="right"><div class="amt">${gbp(b.liability)}</div><div class="meta">exp. <span class="${tone(b.expected)}">${gbp(b.expected)}</span></div></div></div>`).join('')}</div><p class="hint">Tap an open bet to settle it.</p>`;
 }
 
