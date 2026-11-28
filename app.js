@@ -1633,13 +1633,13 @@ function bindWallet() {
     S.form = Object.assign(blankForm(), { type: 'Free Bet', book: f.bookie, amount: String(f.amount), freeBetId: f.id });
     S.tab = 'add'; window.scrollTo(0, 0); render();
   }));
-  if (!$('#notesBox')) return;
   $$('[data-fbdel]').forEach((el) => el.addEventListener('click', async () => {
     const f = S.data.wallet.freeBets.find((x) => x.id === el.dataset.fbdel); if (!f) return;
     el.disabled = true;
     try { await walletPost({ action: 'removeFreeBet', id: f.id }); toast('Removed ' + f.bookie + ' free bet'); }
     catch (e) { toast('Not removed: ' + e.message.slice(0, 40)); el.disabled = false; }
   }));
+  if (!$('#notesBox')) return;
   const box = $('#notesBox'), count = $('#notesCount'), status = $('#notesStatus');
   const showCount = () => { count.textContent = int(box.value.length) + ' / ' + int(NOTES_LIMIT); count.classList.toggle('neg', box.value.length >= NOTES_LIMIT); };
   showCount();
