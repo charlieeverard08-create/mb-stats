@@ -634,3 +634,6 @@ body { font-family: var(--font); -webkit-font-smoothing: antialiased; }
 .logo-fix { display: grid; grid-template-columns: 1fr 1.2fr auto; gap: 8px; align-items: center; }
 .logo-fix .select, .logo-fix .input { min-width: 0; width: 100%; }
 #lg-msg .av { width: 26px; height: 26px; display: inline-grid; vertical-align: middle; margin-left: 6px; font-size: 10px; }
+
+.row.bal-zero { opacity: .6; }
+.row.bal-zero .amt { font-weight: 500; }

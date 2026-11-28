@@ -1045,7 +1045,7 @@ async function submitBet() {
 
 /* ---------- talking to the sheet, with an offline queue ---------- */
 const QUEUE_KEY = 'mb.queue';
-const QUEUEABLE = ['add', 'settle', 'edit', 'setBalance', 'addFreeBet', 'removeFreeBet', 'setTarget', 'casinoAdd', 'casinoUpdate', 'casinoDelete'];
+const QUEUEABLE = ['add', 'settle', 'edit', 'setBalance', 'adjustBalance', 'addFreeBet', 'removeFreeBet', 'setTarget', 'casinoAdd', 'casinoUpdate', 'casinoDelete'];
 const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const getQueue = () => { try { return JSON.parse(store.get(QUEUE_KEY) || '[]'); } catch (e) { return []; } };
 const setQueue = (q) => { store.set(QUEUE_KEY, JSON.stringify(q)); showQueueState(); };
@@ -1093,6 +1093,7 @@ function queueLabel(p) {
   if (p.action === 'settle') return 'Settle ' + p.bookmaker + (p.match ? ' · ' + p.match : '') + ' (' + signed(p.profit) + ')';
   if (p.action === 'edit') return 'Edit ' + p.bookmaker + (p.match ? ' · ' + p.match : '');
   if (p.action === 'setBalance') return (p.remove ? 'Remove balance ' : 'Balance ') + p.bookie + (p.remove ? '' : ' ' + gbp(p.balance));
+  if (p.action === 'adjustBalance') return (p.moves[0].delta > 0 ? 'Deposit ' : 'Withdrawal ') + p.moves[0].bookie + ' ' + gbp(Math.abs(p.moves[0].delta));
   if (p.action === 'addFreeBet') return 'Free bet ' + p.bookie + ' ' + gbp(p.amount);
   if (p.action === 'removeFreeBet') return 'Remove a free bet';
   if (p.action === 'setTarget') return 'Monthly target ' + gbp(p.target);
@@ -1616,14 +1617,18 @@ VIEWS.wallet = function (part) {
       <button type="button" class="more" id="walletBack">Back</button></section></div>`;
   }
   const t = walletTotals();
-  const bal = w.balances.slice().sort((a, b) => b.balance - a.balance);
-  const fbs = w.freeBets.slice().sort((a, b) => (a.expiry || '9999') < (b.expiry || '9999') ? -1 : 1);
-  const balList = bal.length ? bal.map((b) => `
-    <div class="row tap" data-bal="${esc(b.bookie)}">
+  const all = allAccounts().sort((a, b) => b.balance - a.balance || a.bookie.toLowerCase().localeCompare(b.bookie.toLowerCase()));
+  const bal = all.filter((b) => b.balance !== 0), empty = all.filter((b) => b.balance === 0);
+  const balRow = (b) => `
+    <div class="row tap${b.balance < 0 ? ' bal-neg' : ''}${b.balance === 0 ? ' bal-zero' : ''}" data-bal="${esc(b.bookie)}">
       ${avatar(b.bookie)}
-      <div class="main"><div class="title">${esc(b.bookie)}</div><div class="meta">Updated ${esc(agoText(b.updated) || '—')}</div></div>
-      <div class="right"><div class="amt">${gbp(b.balance)}</div></div>
-    </div>`).join('') : `<div class="empty">No balances yet. Add your bookies and exchanges.</div>`;
+      <div class="main"><div class="title">${esc(b.bookie)}</div><div class="meta">${b.balance < 0 ? '<span class="neg">Log a deposit?</span>' : b.updated ? 'Updated ' + esc(agoText(b.updated)) : 'No balance yet'}</div></div>
+      <div class="right"><div class="amt${b.balance < 0 ? ' neg' : ''}">${gbp(b.balance)}</div></div>
+    </div>`;
+  const fbs = w.freeBets.slice().sort((a, b) => (a.expiry || '9999') < (b.expiry || '9999') ? -1 : 1);
+  const balList = (bal.length ? bal.map(balRow).join('') : `<div class="empty">Nothing in your accounts yet. Log a deposit to start.</div>`)
+    + (empty.length ? (S.showEmpty ? empty.map(balRow).join('') + `<button type="button" class="more" id="balEmpty">Hide empty accounts</button>`
+      : `<button type="button" class="more" id="balEmpty">Show ${empty.length} empty account${empty.length > 1 ? 's' : ''}</button>`) : '');
   const fbList = fbs.length ? fbs.map((f) => {
     const e = expiryText(f.expiry);
     return `<div class="fb">
@@ -1637,7 +1642,7 @@ VIEWS.wallet = function (part) {
   }).join('') : `<div class="empty">No free bets. Add them as you get them.</div>`;
   if (part === 'balances') return `
     <section class="card" id="balances">
-      <div class="card-head"><div><h2>Balances</h2><p class="sub">Tap one to update it</p></div><button type="button" class="chip" id="balAdd">+ Add</button></div>
+      <div class="card-head"><div><h2>Balances</h2><p class="sub">Tap one to update it</p></div><button type="button" class="chip fb-use" id="balAdd">Log deposit</button></div>
       <div class="list">${balList}</div>
     </section>`;
   if (part === 'freebets') return `
@@ -1657,7 +1662,8 @@ function bindWallet() {
   const back = $('#walletBack'); if (back) back.onclick = () => { S.tab = 'overview'; render(); };
   if (!S.data.wallet) return;
   $$('[data-bal]').forEach((el) => el.addEventListener('click', () => openBalance(el.dataset.bal)));
-  const ba = $('#balAdd'); if (ba) ba.onclick = () => openBalance('');
+  const ba = $('#balAdd'); if (ba) ba.onclick = () => openDeposit();
+  const be = $('#balEmpty'); if (be) be.onclick = () => { S.showEmpty = !S.showEmpty; render(); };
   const fa = $('#fbAdd'); if (fa) fa.onclick = openFreeBetForm;
   $$('[data-fbuse]').forEach((el) => el.addEventListener('click', () => {
     const f = S.data.wallet.freeBets.find((x) => x.id === el.dataset.fbuse); if (!f) return;
@@ -1716,16 +1722,69 @@ function bookieOptions() {
   return `<datalist id="dl-wallet">${Array.from(names).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())).map((n) => `<option value="${esc(n)}">`).join('')}</datalist>`;
 }
 
+// Every account: the ones with a saved balance, plus every bookie you've bet with and your exchange (at £0).
+function allAccounts() {
+  const w = S.data.wallet, seen = new Map();
+  for (const b of w.balances) seen.set(logoKey(b.bookie), Object.assign({}, b));
+  const add = (n) => { const k = logoKey(n); if (k && !seen.has(k)) seen.set(k, { bookie: n, balance: 0, updated: '' }); };
+  for (const b of S.data.bets) add(b.rawBook || b.book);
+  if (S.exchange) add(S.exchange);
+  return Array.from(seen.values());
+}
+
+function openDeposit() {
+  const names = allAccounts().sort((a, b) => b.balance - a.balance || a.bookie.toLowerCase().localeCompare(b.bookie.toLowerCase())).map((a) => a.bookie);
+  let dir = 1;
+  const sheet = openSheet(`
+    <h2>Log a deposit</h2><p class="sub">Adds to that account's balance</p>
+    <div class="seg" role="group" aria-label="Type"><button type="button" data-dir="1" aria-selected="true">Deposit</button><button type="button" data-dir="-1" aria-selected="false">Withdrawal</button></div>
+    <label class="fl" for="dep-name">Bookie or exchange</label>
+    <input id="dep-name" class="input" list="dl-dep" autocapitalize="words" placeholder="Start typing, e.g. Betfred">
+    <datalist id="dl-dep">${names.map((n) => `<option value="${esc(n)}">`).join('')}</datalist>
+    <label class="fl" for="dep-amt">Amount £</label>
+    <input id="dep-amt" class="input" inputmode="decimal" placeholder="10">
+    <p class="small muted" id="dep-now"></p>
+    <button type="button" class="primary" id="dep-save">Log deposit</button>
+    <button type="button" class="text-btn" id="dep-cancel">Cancel</button>
+    <p class="small" id="dep-msg" role="status"></p>`);
+  const name = $('#dep-name', sheet), amt = $('#dep-amt', sheet), now = $('#dep-now', sheet), msg = $('#dep-msg', sheet), btn = $('#dep-save', sheet);
+  setTimeout(() => name.focus(), 250);
+  const match = () => { const k = logoKey(name.value); return allAccounts().find((a) => logoKey(a.bookie) === k); };
+  const preview = () => {
+    const a = match(), v = pnum(amt.value);
+    now.textContent = a ? a.bookie + ': ' + gbp(a.balance) + (v ? ' → ' + gbp(r2(a.balance + dir * v)) : '') : name.value.trim() ? 'New account' : '';
+  };
+  name.addEventListener('input', preview); amt.addEventListener('input', preview);
+  $$('[data-dir]', sheet).forEach((b) => b.addEventListener('click', () => {
+    dir = Number(b.dataset.dir);
+    $$('[data-dir]', sheet).forEach((x) => x.setAttribute('aria-selected', String(x === b)));
+    btn.textContent = dir > 0 ? 'Log deposit' : 'Log withdrawal'; preview();
+  }));
+  $('#dep-cancel', sheet).onclick = closeSettle;
+  btn.onclick = async () => {
+    const a = match(), bookie = a ? a.bookie : name.value.trim(), v = pnum(amt.value);
+    if (!bookie) { msg.textContent = 'Pick the bookie or exchange.'; msg.className = 'small err'; return; }
+    if (!v || v <= 0) { msg.textContent = 'Enter the amount.'; msg.className = 'small err'; return; }
+    btn.disabled = true; btn.textContent = 'Saving…';
+    try {
+      const j = await walletPost({ action: 'adjustBalance', moves: [{ bookie, delta: r2(dir * v) }] });
+      closeSettle(); if (!j.queued) toast(bookie + ' ' + signed(dir * v));
+    } catch (e) { msg.textContent = e.message; msg.className = 'small err'; btn.disabled = false; btn.textContent = dir > 0 ? 'Log deposit' : 'Log withdrawal'; }
+  };
+}
+
 function openBalance(name) {
-  const cur = name ? S.data.wallet.balances.find((b) => b.bookie === name) : null;
+  const real = name ? S.data.wallet.balances.find((b) => b.bookie === name) : null;
+  const cur = real || (name ? { bookie: name, balance: 0, updated: '' } : null);
+  const inBets = cur && S.data.bets.some((b) => logoKey(b.book) === logoKey(cur.bookie));
   const sheet = openSheet(`
     <h2>${cur ? esc(cur.bookie) : 'Add a balance'}</h2>
-    <p class="sub">${cur ? 'Last updated ' + esc(agoText(cur.updated) || '—') : 'A bookie or exchange account'}</p>
+    <p class="sub">${cur ? (cur.updated ? 'Last updated ' + esc(agoText(cur.updated)) : 'Set the balance in this account') : 'A bookie or exchange account'}</p>
     ${cur ? '' : `<label class="fl" for="bal-name">Bookie or exchange</label><input id="bal-name" class="input" list="dl-wallet" autocapitalize="words" placeholder="e.g. Smarkets">${bookieOptions()}`}
     <label class="fl" for="bal-amt">Balance £</label>
     <input id="bal-amt" class="input" inputmode="decimal" value="${cur ? esc(cur.balance) : ''}" placeholder="0.00">
     <button type="button" class="primary" id="bal-save">Save</button>
-    ${cur ? '<button type="button" class="text-btn neg" id="bal-del">Remove this account</button>' : ''}
+    ${real && !inBets ? '<button type="button" class="text-btn neg" id="bal-del">Remove this account</button>' : ''}
     <button type="button" class="text-btn" id="bal-cancel">Cancel</button>
     <p class="small" id="bal-msg" role="status"></p>`);
   const amt = $('#bal-amt', sheet); setTimeout(() => (cur ? amt : $('#bal-name', sheet)).focus(), 250);
